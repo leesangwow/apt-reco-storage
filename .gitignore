@@ -1,0 +1,20 @@
+# 환경변수 (비밀번호 포함)
+.env
+.env.local
+.env*.local
+
+# 의존성
+node_modules/
+__pycache__/
+*.pyc
+
+# Next.js 빌드
+web/.next/
+web/out/
+
+# 로그
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

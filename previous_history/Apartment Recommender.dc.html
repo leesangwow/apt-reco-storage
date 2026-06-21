@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Pretendard',-apple-system,sans-serif;-webkit-font-smoothing:antialiased;}
+  ::-webkit-scrollbar{height:0;width:0;}
+  @keyframes sheetUp{from{transform:translateY(100%);}to{transform:translateY(0);}}
+  @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+</style>
+</helmet>
+<div style="width:max-content;min-width:100%;min-height:100vh;box-sizing:border-box;padding:48px;background:#ECEBE6;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+    <div style="font-size:22px;font-weight:800;color:#1A1A1A;letter-spacing:-0.5px;">비슷한집 — 내 관심 아파트와 가격대가 닮은 단지 추천</div>
+  </div>
+  <div style="font-size:14px;color:#7C7C76;margin-bottom:30px;">상단 범위 칩을 누르면 추천이 실제로 바뀝니다 · 한 페이지 3곳씩 · 카드 스타일 3종 비교</div>
+
+  <div style="display:flex;gap:44px;align-items:flex-start;">
+
+    <!-- ============ VARIANT A : 리스트형 ============ -->
+    <div style="flex:none;width:392px;">
+      <div style="font-size:13px;font-weight:700;color:#56564E;margin-bottom:12px;">A · 리스트형 <span style="color:#A7A79E;font-weight:500;">당근 피드 느낌</span></div>
+      <div style="position:relative;width:392px;background:#F5F5F1;border-radius:46px;border:1px solid #E2E2DC;box-shadow:0 18px 50px rgba(0,0,0,.13);overflow:hidden;">
+        <!-- status bar -->
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 30px 6px;font-size:13px;font-weight:700;color:#1A1A1A;">
+          <span>9:41</span>
+          <div style="display:flex;gap:5px;align-items:center;">
+            <div style="display:flex;gap:2px;align-items:flex-end;height:11px;"><div style="width:3px;height:5px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:7px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:9px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:11px;background:#1A1A1A;border-radius:1px;"></div></div>
+            <div style="width:22px;height:11px;border:1.5px solid #1A1A1A;border-radius:3px;position:relative;"><div style="position:absolute;inset:1.5px;width:13px;background:#1A1A1A;border-radius:1px;"></div></div>
+          </div>
+        </div>
+        <!-- my apartment header -->
+        <div style="padding:8px 18px 14px;">
+          <div style="background:#fff;border-radius:20px;padding:15px 17px;box-shadow:0 2px 10px rgba(0,0,0,.04);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;">
+              <span style="font-size:11px;font-weight:800;color:#C99A00;background:#FFF6D6;padding:4px 9px;border-radius:8px;letter-spacing:.2px;">내 관심 아파트</span>
+              <button onClick="{{ openSearch }}" style="border:none;background:#F2F2EE;color:#3A3A36;font-size:12px;font-weight:700;padding:7px 13px;border-radius:10px;cursor:pointer;font-family:inherit;">검색·변경</button>
+            </div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;">
+              <div style="min-width:0;">
+                <div style="font-size:18px;font-weight:800;color:#191919;letter-spacing:-0.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ myName }}</div>
+                <div style="font-size:12.5px;color:#8A8A82;margin-top:3px;">{{ myMeta }}</div>
+              </div>
+              <div style="font-size:20px;font-weight:800;color:#191919;white-space:nowrap;">{{ myPriceText }}</div>
+            </div>
+          </div>
+        </div>
+        <!-- scope chips -->
+        <div style="display:flex;gap:8px;padding:2px 18px 10px;overflow-x:auto;">
+          <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+            <button onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</button>
+          </sc-for>
+          <button onClick="{{ openRegion }}" style="flex:none;border:1px dashed #D2D2CA;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;padding:9px 14px;border-radius:13px;color:#6E6E66;white-space:nowrap;">＋ 지역</button>
+        </div>
+        <!-- region sub-chips (custom only) -->
+        <!-- subtitle -->
+        <div style="padding:0 22px 10px;font-size:12.5px;color:#8A8A82;">{{ subtitle }}</div>
+        <div style="display:flex;gap:6px;padding:0 18px 12px;overflow-x:auto;align-items:center;">
+          <span style="font-size:11px;color:#A0A098;font-weight:700;flex:none;">정렬</span>
+          <sc-for list="{{ sortChips }}" as="o" hint-placeholder-count="4">
+            <button onClick="{{ o.onClick }}" style="{{ o.style }}">{{ o.label }}</button>
+          </sc-for>
+        </div>
+        <!-- cards -->
+        <div style="display:flex;flex-direction:column;gap:11px;padding:0 16px 4px;">
+          <sc-for list="{{ cards }}" as="a" hint-placeholder-count="3">
+            <div style="position:relative;display:flex;gap:13px;background:#fff;border-radius:18px;padding:13px;box-shadow:0 2px 9px rgba(0,0,0,.04);">
+              <div style="flex:none;width:92px;height:92px;border-radius:13px;{{ a.thumbStyle }};position:relative;overflow:hidden;">
+                <span style="position:absolute;bottom:7px;left:8px;font-family:ui-monospace,monospace;font-size:9px;color:rgba(0,0,0,.42);letter-spacing:-0.3px;">단지 전경</span>
+              </div>
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+                  <div style="font-size:15px;font-weight:800;color:#191919;letter-spacing:-0.3px;line-height:1.25;">{{ a.name }}</div>
+                  <button onClick="{{ a.onLike }}" style="border:none;background:none;cursor:pointer;font-size:19px;line-height:1;padding:0;color:{{ a.heartColor }};">{{ a.heart }}</button>
+                </div>
+                <div style="font-size:12px;color:#9A9A92;margin-top:2px;">{{ a.loc }} · {{ a.dist }}</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                  <span style="font-size:17px;font-weight:800;color:#191919;">{{ a.priceText }}</span>
+                  <span style="font-size:11px;font-weight:800;color:{{ a.diffColor }};background:{{ a.diffBg }};padding:3px 8px;border-radius:8px;">{{ a.diffText }}</span>
+                </div>
+                <div style="font-size:11px;color:#ADADA4;margin-top:6px;">{{ a.meta }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <!-- pager -->
+        <sc-if value="{{ showMore }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:14px 18px 22px;">
+            <button onClick="{{ onMore }}" style="width:100%;border:1px solid #E6E6E0;background:#fff;color:#3A3A36;font-family:inherit;font-size:14px;font-weight:800;padding:14px;border-radius:15px;cursor:pointer;">{{ moreLabel }}</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ regionOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(20,20,18,.34);animation:fadeIn .18s ease;" onClick="{{ closeRegion }}"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:26px 26px 46px 46px;padding:10px 20px 26px;animation:sheetUp .26s cubic-bezier(.22,1,.36,1);max-height:88%;overflow-y:auto;">
+            <div style="width:38px;height:4px;background:#E2E2DC;border-radius:3px;margin:6px auto 16px;"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+              <div style="font-size:17px;font-weight:800;color:#191919;">{{ regionTitle }}</div>
+              <button onClick="{{ closeRegion }}" style="border:none;background:#FFD400;color:#1A1A1A;font-family:inherit;font-size:13px;font-weight:800;padding:8px 16px;border-radius:11px;cursor:pointer;">완료</button>
+            </div>
+            <div style="font-size:12.5px;color:#9A9A92;margin-bottom:14px;">전국에서 비교할 지역을 골라 칩으로 추가하세요</div>
+            <div style="display:flex;gap:7px;overflow-x:auto;padding-bottom:14px;">
+              <sc-for list="{{ sidoTabs }}" as="t" hint-placeholder-count="7">
+                <button onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ guList }}" as="g" hint-placeholder-count="3">
+                <button onClick="{{ g.onClick }}" style="{{ g.style }}">
+                  <div style="text-align:left;">
+                    <div style="font-size:14.5px;font-weight:700;color:#191919;">{{ g.label }}</div>
+                    <div style="font-size:11.5px;color:#9A9A92;margin-top:2px;">{{ g.sub }}</div>
+                  </div>
+                  <span style="font-size:18px;font-weight:800;color:{{ g.markColor }};">{{ g.mark }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- search sheet -->
+        <sc-if value="{{ searchOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(20,20,18,.34);animation:fadeIn .18s ease;" onClick="{{ closeSearch }}"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:26px 26px 46px 46px;padding:10px 20px 26px;animation:sheetUp .26s cubic-bezier(.22,1,.36,1);max-height:84%;overflow-y:auto;">
+            <div style="width:38px;height:4px;background:#E2E2DC;border-radius:3px;margin:6px auto 16px;"></div>
+            <div style="font-size:17px;font-weight:800;color:#191919;margin-bottom:13px;">관심 아파트 선택</div>
+            <div style="display:flex;align-items:center;gap:8px;background:#F4F4F0;border-radius:14px;padding:12px 14px;margin-bottom:16px;">
+              <div style="width:15px;height:15px;border:2px solid #B0B0A8;border-radius:50%;position:relative;flex:none;"><div style="position:absolute;width:6px;height:2px;background:#B0B0A8;transform:rotate(45deg);bottom:-2px;right:-3px;border-radius:1px;"></div></div>
+              <input value="{{ q }}" onChange="{{ onSearch }}" placeholder="아파트명으로 검색" style="border:none;background:none;outline:none;font-size:14px;font-family:inherit;flex:1;color:#191919;"/>
+            </div>
+            <div style="font-size:12px;font-weight:700;color:#A0A098;margin-bottom:9px;">검색 결과 · 내 관심목록</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <sc-for list="{{ searchList }}" as="s" hint-placeholder-count="4">
+                <button onClick="{{ s.onPick }}" style="{{ s.rowStyle }}">
+                  <div style="text-align:left;min-width:0;">
+                    <div style="font-size:14.5px;font-weight:700;color:#191919;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ s.name }}</div>
+                    <div style="font-size:11.5px;color:#9A9A92;margin-top:2px;">{{ s.sub }}</div>
+                  </div>
+                  <span style="font-size:14px;font-weight:800;color:#191919;white-space:nowrap;">{{ s.price }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- ============ VARIANT B : 카드형 ============ -->
+    <div style="flex:none;width:392px;">
+      <div style="font-size:13px;font-weight:700;color:#56564E;margin-bottom:12px;">B · 카드형 <span style="color:#A7A79E;font-weight:500;">토스 카드 느낌</span></div>
+      <div style="position:relative;width:392px;background:#F5F5F1;border-radius:46px;border:1px solid #E2E2DC;box-shadow:0 18px 50px rgba(0,0,0,.13);overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 30px 6px;font-size:13px;font-weight:700;color:#1A1A1A;">
+          <span>9:41</span>
+          <div style="display:flex;gap:5px;align-items:center;">
+            <div style="display:flex;gap:2px;align-items:flex-end;height:11px;"><div style="width:3px;height:5px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:7px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:9px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:11px;background:#1A1A1A;border-radius:1px;"></div></div>
+            <div style="width:22px;height:11px;border:1.5px solid #1A1A1A;border-radius:3px;position:relative;"><div style="position:absolute;inset:1.5px;width:13px;background:#1A1A1A;border-radius:1px;"></div></div>
+          </div>
+        </div>
+        <div style="padding:8px 18px 14px;">
+          <div style="background:#191919;border-radius:20px;padding:15px 17px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;">
+              <span style="font-size:11px;font-weight:800;color:#1A1A1A;background:#FFD400;padding:4px 9px;border-radius:8px;">내 관심 아파트</span>
+              <button onClick="{{ openSearch }}" style="border:none;background:#333330;color:#EDEDE8;font-size:12px;font-weight:700;padding:7px 13px;border-radius:10px;cursor:pointer;font-family:inherit;">검색·변경</button>
+            </div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;">
+              <div style="min-width:0;">
+                <div style="font-size:18px;font-weight:800;color:#fff;letter-spacing:-0.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ myName }}</div>
+                <div style="font-size:12.5px;color:#9C9C94;margin-top:3px;">{{ myMeta }}</div>
+              </div>
+              <div style="font-size:20px;font-weight:800;color:#FFD400;white-space:nowrap;">{{ myPriceText }}</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;padding:2px 18px 10px;overflow-x:auto;">
+          <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+            <button onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</button>
+          </sc-for>
+          <button onClick="{{ openRegion }}" style="flex:none;border:1px dashed #D2D2CA;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;padding:9px 14px;border-radius:13px;color:#6E6E66;white-space:nowrap;">＋ 지역</button>
+        </div>
+        <div style="padding:0 22px 10px;font-size:12.5px;color:#8A8A82;">{{ subtitle }}</div>
+        <div style="display:flex;gap:6px;padding:0 18px 12px;overflow-x:auto;align-items:center;">
+          <span style="font-size:11px;color:#A0A098;font-weight:700;flex:none;">정렬</span>
+          <sc-for list="{{ sortChips }}" as="o" hint-placeholder-count="4">
+            <button onClick="{{ o.onClick }}" style="{{ o.style }}">{{ o.label }}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:13px;padding:0 16px 4px;">
+          <sc-for list="{{ cards }}" as="a" hint-placeholder-count="3">
+            <div style="background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 2px 11px rgba(0,0,0,.05);">
+              <div style="position:relative;height:128px;{{ a.thumbStyle }};">
+                <button onClick="{{ a.onLike }}" style="position:absolute;top:11px;right:11px;border:none;background:rgba(255,255,255,.9);width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:17px;line-height:1;color:{{ a.heartColor }};box-shadow:0 2px 6px rgba(0,0,0,.1);">{{ a.heart }}</button>
+                <span style="position:absolute;left:13px;bottom:11px;font-size:12px;font-weight:800;color:#fff;background:rgba(20,20,18,.62);padding:5px 10px;border-radius:9px;backdrop-filter:blur(2px);">{{ a.diffText }}</span>
+                <span style="position:absolute;left:13px;top:11px;font-family:ui-monospace,monospace;font-size:9px;color:rgba(0,0,0,.4);">단지 전경</span>
+              </div>
+              <div style="padding:14px 15px 15px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                  <div style="font-size:16px;font-weight:800;color:#191919;letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ a.name }}</div>
+                  <div style="font-size:19px;font-weight:800;color:#191919;white-space:nowrap;">{{ a.priceText }}</div>
+                </div>
+                <div style="font-size:12px;color:#9A9A92;margin-top:4px;">{{ a.loc }} · {{ a.dist }}</div>
+                <div style="font-size:11.5px;color:#ADADA4;margin-top:9px;border-top:1px solid #F2F2EE;padding-top:9px;">{{ a.meta }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ showMore }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:14px 18px 22px;">
+            <button onClick="{{ onMore }}" style="width:100%;border:1px solid #E6E6E0;background:#fff;color:#3A3A36;font-family:inherit;font-size:14px;font-weight:800;padding:14px;border-radius:15px;cursor:pointer;">{{ moreLabel }}</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ regionOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(20,20,18,.34);animation:fadeIn .18s ease;" onClick="{{ closeRegion }}"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:26px 26px 46px 46px;padding:10px 20px 26px;animation:sheetUp .26s cubic-bezier(.22,1,.36,1);max-height:88%;overflow-y:auto;">
+            <div style="width:38px;height:4px;background:#E2E2DC;border-radius:3px;margin:6px auto 16px;"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+              <div style="font-size:17px;font-weight:800;color:#191919;">{{ regionTitle }}</div>
+              <button onClick="{{ closeRegion }}" style="border:none;background:#FFD400;color:#1A1A1A;font-family:inherit;font-size:13px;font-weight:800;padding:8px 16px;border-radius:11px;cursor:pointer;">완료</button>
+            </div>
+            <div style="font-size:12.5px;color:#9A9A92;margin-bottom:14px;">전국에서 비교할 지역을 골라 칩으로 추가하세요</div>
+            <div style="display:flex;gap:7px;overflow-x:auto;padding-bottom:14px;">
+              <sc-for list="{{ sidoTabs }}" as="t" hint-placeholder-count="7">
+                <button onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ guList }}" as="g" hint-placeholder-count="3">
+                <button onClick="{{ g.onClick }}" style="{{ g.style }}">
+                  <div style="text-align:left;">
+                    <div style="font-size:14.5px;font-weight:700;color:#191919;">{{ g.label }}</div>
+                    <div style="font-size:11.5px;color:#9A9A92;margin-top:2px;">{{ g.sub }}</div>
+                  </div>
+                  <span style="font-size:18px;font-weight:800;color:{{ g.markColor }};">{{ g.mark }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- ============ VARIANT C : 비교형 ============ -->
+    <div style="flex:none;width:392px;">
+      <div style="font-size:13px;font-weight:700;color:#56564E;margin-bottom:12px;">C · 비교형 <span style="color:#A7A79E;font-weight:500;">가격차 한눈에</span></div>
+      <div style="position:relative;width:392px;background:#F5F5F1;border-radius:46px;border:1px solid #E2E2DC;box-shadow:0 18px 50px rgba(0,0,0,.13);overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 30px 6px;font-size:13px;font-weight:700;color:#1A1A1A;">
+          <span>9:41</span>
+          <div style="display:flex;gap:5px;align-items:center;">
+            <div style="display:flex;gap:2px;align-items:flex-end;height:11px;"><div style="width:3px;height:5px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:7px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:9px;background:#1A1A1A;border-radius:1px;"></div><div style="width:3px;height:11px;background:#1A1A1A;border-radius:1px;"></div></div>
+            <div style="width:22px;height:11px;border:1.5px solid #1A1A1A;border-radius:3px;position:relative;"><div style="position:absolute;inset:1.5px;width:13px;background:#1A1A1A;border-radius:1px;"></div></div>
+          </div>
+        </div>
+        <div style="padding:8px 18px 14px;">
+          <div style="background:#fff;border-radius:20px;padding:15px 17px;box-shadow:0 2px 10px rgba(0,0,0,.04);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;">
+              <span style="font-size:11px;font-weight:800;color:#C99A00;background:#FFF6D6;padding:4px 9px;border-radius:8px;">기준 — 내 관심 아파트</span>
+              <button onClick="{{ openSearch }}" style="border:none;background:#F2F2EE;color:#3A3A36;font-size:12px;font-weight:700;padding:7px 13px;border-radius:10px;cursor:pointer;font-family:inherit;">검색·변경</button>
+            </div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;">
+              <div style="min-width:0;">
+                <div style="font-size:18px;font-weight:800;color:#191919;letter-spacing:-0.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ myName }}</div>
+                <div style="font-size:12.5px;color:#8A8A82;margin-top:3px;">{{ myMeta }}</div>
+              </div>
+              <div style="font-size:20px;font-weight:800;color:#191919;white-space:nowrap;">{{ myPriceText }}</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;padding:2px 18px 10px;overflow-x:auto;">
+          <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+            <button onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</button>
+          </sc-for>
+          <button onClick="{{ openRegion }}" style="flex:none;border:1px dashed #D2D2CA;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;padding:9px 14px;border-radius:13px;color:#6E6E66;white-space:nowrap;">＋ 지역</button>
+        </div>
+        <div style="padding:0 22px 10px;font-size:12.5px;color:#8A8A82;">{{ subtitle }}</div>
+        <div style="display:flex;gap:6px;padding:0 18px 12px;overflow-x:auto;align-items:center;">
+          <span style="font-size:11px;color:#A0A098;font-weight:700;flex:none;">정렬</span>
+          <sc-for list="{{ sortChips }}" as="o" hint-placeholder-count="4">
+            <button onClick="{{ o.onClick }}" style="{{ o.style }}">{{ o.label }}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:0 22px 12px;font-size:11px;color:#B0B0A8;font-weight:600;">
+          <span style="color:#16A06A;">◂ 더 저렴</span><span style="flex:1;"></span><span style="color:#E8552D;">더 비쌈 ▸</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding:0 16px 4px;">
+          <sc-for list="{{ cards }}" as="a" hint-placeholder-count="3">
+            <div style="background:#fff;border-radius:16px;padding:13px 14px;box-shadow:0 2px 9px rgba(0,0,0,.04);">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+                  <div style="flex:none;width:46px;height:46px;border-radius:11px;{{ a.thumbStyle }};"></div>
+                  <div style="min-width:0;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                      <span style="font-size:14.5px;font-weight:800;color:#191919;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;">{{ a.name }}</span>
+                      <button onClick="{{ a.onLike }}" style="border:none;background:none;cursor:pointer;font-size:15px;line-height:1;padding:0;color:{{ a.heartColor }};">{{ a.heart }}</button>
+                    </div>
+                    <div style="font-size:11px;color:#9A9A92;margin-top:2px;">{{ a.loc }} · {{ a.dist }}</div>
+                  </div>
+                </div>
+                <div style="font-size:16px;font-weight:800;color:#191919;white-space:nowrap;">{{ a.priceText }}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:11px;">
+                <div style="position:relative;width:140px;height:10px;background:#F2F2EE;border-radius:5px;flex:none;">
+                  <div style="position:absolute;left:69px;top:0;bottom:0;width:2px;background:#D8D8D0;"></div>
+                  <div style="position:absolute;top:1px;bottom:1px;border-radius:4px;{{ a.barStyle }}"></div>
+                </div>
+                <span style="font-size:12px;font-weight:800;color:{{ a.diffColor }};">{{ a.diffText }}</span>
+              </div>
+              <div style="font-size:11px;color:#ADADA4;margin-top:9px;border-top:1px solid #F4F4F0;padding-top:9px;">{{ a.meta }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ showMore }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:14px 18px 22px;">
+            <button onClick="{{ onMore }}" style="width:100%;border:1px solid #E6E6E0;background:#fff;color:#3A3A36;font-family:inherit;font-size:14px;font-weight:800;padding:14px;border-radius:15px;cursor:pointer;">{{ moreLabel }}</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ regionOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:0;background:rgba(20,20,18,.34);animation:fadeIn .18s ease;" onClick="{{ closeRegion }}"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:26px 26px 46px 46px;padding:10px 20px 26px;animation:sheetUp .26s cubic-bezier(.22,1,.36,1);max-height:88%;overflow-y:auto;">
+            <div style="width:38px;height:4px;background:#E2E2DC;border-radius:3px;margin:6px auto 16px;"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+              <div style="font-size:17px;font-weight:800;color:#191919;">{{ regionTitle }}</div>
+              <button onClick="{{ closeRegion }}" style="border:none;background:#FFD400;color:#1A1A1A;font-family:inherit;font-size:13px;font-weight:800;padding:8px 16px;border-radius:11px;cursor:pointer;">완료</button>
+            </div>
+            <div style="font-size:12.5px;color:#9A9A92;margin-bottom:14px;">전국에서 비교할 지역을 골라 칩으로 추가하세요</div>
+            <div style="display:flex;gap:7px;overflow-x:auto;padding-bottom:14px;">
+              <sc-for list="{{ sidoTabs }}" as="t" hint-placeholder-count="7">
+                <button onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <sc-for list="{{ guList }}" as="g" hint-placeholder-count="3">
+                <button onClick="{{ g.onClick }}" style="{{ g.style }}">
+                  <div style="text-align:left;">
+                    <div style="font-size:14.5px;font-weight:700;color:#191919;">{{ g.label }}</div>
+                    <div style="font-size:11.5px;color:#9A9A92;margin-top:2px;">{{ g.sub }}</div>
+                  </div>
+                  <span style="font-size:18px;font-weight:800;color:{{ g.markColor }};">{{ g.mark }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1340,&quot;height&quot;:960}}">
+class Component extends DCLogic {
+  state = { baseId: 1, scope: 'dong', visible: 3, sort: 'diff', sortDir: 'asc', liked: {}, searchOpen: false, q: '', regionOpen: false, sheetSido: '서울', addedRegions: [] };
+
+  constructor(props){ super(props); this._buildRegions(); }
+
+  RD = {
+    '서울': {
+      '강남구': [['도곡렉슬','도곡동',14.7,33,2006,3002,11.2,'차로 26분'],['역삼e편한세상','역삼동',14.2,32,2005,840,10.4,'차로 24분'],['논현아이파크','논현동',15.0,33,2018,635,12.1,'차로 27분']],
+      '송파구': [['헬리오시티','가락동',13.9,33,2018,9510,9.8,'차로 22분'],['잠실엘스','잠실동',14.6,33,2008,5678,11.0,'차로 25분'],['리센츠','잠실동',14.8,33,2008,5563,11.3,'차로 25분']],
+      '노원구': [['상계주공7단지','상계동',8.9,31,1988,2634,13.5,'차로 31분'],['중계무지개','중계동',9.4,32,1991,2433,12.8,'차로 30분']],
+    },
+    '경기': {
+      '분당구(성남)': [['정자동파크뷰','정자동',13.2,34,2004,1829,19.2,'차로 38분'],['이매촌삼성','이매동',12.4,33,1993,1162,20.1,'차로 40분'],['수내동양지마을','수내동',12.9,33,1992,1162,18.7,'차로 37분']],
+      '영통구(수원)': [['광교호수마을','이의동',11.8,34,2012,1188,28.4,'차로 52분'],['영통롯데캐슬','영통동',9.6,33,1997,1162,30.2,'차로 55분']],
+      '일산동구(고양)': [['식사위시티블루밍','식사동',9.2,38,2010,2659,21.4,'차로 41분'],['백석요진와이시티','백석동',10.8,35,2016,2404,17.8,'차로 35분']],
+    },
+    '인천': {
+      '연수구(송도)': [['더샵퍼스트월드','송도동',12.6,34,2009,1597,29.0,'차로 54분'],['더샵센트럴파크','송도동',13.1,33,2010,729,29.5,'차로 55분']],
+    },
+    '부산': {
+      '해운대구': [['두산위브더제니스','우동',13.8,40,2011,1788,318,'기차 2시간 40분'],['마린시티자이','우동',14.4,38,2018,258,320,'기차 2시간 40분']],
+      '수영구': [['남천삼익비치','남천동',13.2,35,1979,3060,322,'기차 2시간 45분']],
+    },
+    '대구': {
+      '수성구': [['범어롯데캐슬','범어동',11.4,34,2009,469,238,'기차 1시간 50분'],['수성롯데캐슬더퍼스트','만촌동',10.6,33,2016,498,240,'기차 1시간 50분']],
+    },
+    '대전': {
+      '유성구': [['도룡SK뷰','도룡동',12.8,34,2018,383,146,'기차 1시간'],['죽동대원칸타빌','죽동',9.2,33,2017,933,148,'기차 1시간 5분']],
+    },
+  };
+
+  _buildRegions(){
+    const pal=['#F2B705','#6AB7A8','#E8855B','#9C8AD6','#7FA6E0'];
+    this.sidos = Object.keys(this.RD);
+    this.regionPools = {};
+    let uid = 600;
+    for(const sido of this.sidos){
+      for(const gu of Object.keys(this.RD[sido])){
+        this.regionPools[sido+'/'+gu] = this.RD[sido][gu].map((r,i)=>({
+          id:uid++, name:r[0], gu:gu.replace(/\(.*\)/,''), dong:r[1],
+          price:r[2], pyeong:r[3], area:Math.round(r[3]*2.55), year:r[4], hh:r[5],
+          km:r[6], mins:r[7], color:pal[i%pal.length],
+        }));
+      }
+    }
+  }
+
+  baseApts = [
+    { id:1, name:'마포래미안푸르지오', gu:'마포구', dong:'아현동', price:13.8, pyeong:34, area:84, year:2014, hh:3885 },
+    { id:2, name:'공덕자이', gu:'마포구', dong:'공덕동', price:14.2, pyeong:33, area:84, year:2015, hh:1164 },
+    { id:3, name:'신촌숲아이파크', gu:'서대문구', dong:'남가좌동', price:13.5, pyeong:34, area:84, year:2019, hh:1015 },
+    { id:4, name:'e편한세상신촌', gu:'서대문구', dong:'북아현동', price:13.2, pyeong:33, area:84, year:2017, hh:1910 },
+    { id:5, name:'마포프레스티지자이', gu:'마포구', dong:'염리동', price:14.9, pyeong:35, area:84, year:2021, hh:1694 },
+  ];
+
+  recPools = {
+    dong: [
+      { id:101, name:'공덕자이', gu:'마포구', dong:'공덕동', price:14.2, pyeong:33, area:84, year:2015, hh:1164, km:0.8, mins:'도보 11분', color:'#F2B705' },
+      { id:102, name:'신촌숲아이파크', gu:'서대문구', dong:'남가좌동', price:13.5, pyeong:34, area:84, year:2019, hh:1015, km:1.2, mins:'도보 16분', color:'#6AB7A8' },
+      { id:103, name:'e편한세상신촌', gu:'서대문구', dong:'북아현동', price:13.2, pyeong:33, area:84, year:2017, hh:1910, km:0.9, mins:'도보 12분', color:'#E8855B' },
+      { id:104, name:'아현아이파크', gu:'마포구', dong:'아현동', price:14.6, pyeong:35, area:84, year:2020, hh:497, km:0.5, mins:'도보 7분', color:'#9C8AD6' },
+      { id:105, name:'공덕더샵', gu:'마포구', dong:'공덕동', price:13.0, pyeong:32, area:80, year:2015, hh:472, km:1.4, mins:'차로 6분', color:'#7FA6E0' },
+    ],
+    gu: [
+      { id:201, name:'마포프레스티지자이', gu:'마포구', dong:'염리동', price:14.9, pyeong:35, area:84, year:2021, hh:1694, km:1.5, mins:'차로 7분', color:'#F2B705' },
+      { id:202, name:'신촌그랑자이', gu:'마포구', dong:'대흥동', price:13.6, pyeong:34, area:84, year:2020, hh:1248, km:2.1, mins:'차로 9분', color:'#6AB7A8' },
+      { id:203, name:'마포자이3차', gu:'마포구', dong:'염리동', price:13.1, pyeong:33, area:84, year:2018, hh:927, km:1.8, mins:'차로 8분', color:'#E8855B' },
+      { id:204, name:'래미안웰스트림', gu:'마포구', dong:'신수동', price:14.4, pyeong:34, area:84, year:2016, hh:773, km:2.4, mins:'차로 10분', color:'#9C8AD6' },
+      { id:205, name:'공덕SK리더스뷰', gu:'마포구', dong:'공덕동', price:14.0, pyeong:33, area:84, year:2019, hh:472, km:1.3, mins:'차로 6분', color:'#7FA6E0' },
+    ],
+    city: [
+      { id:301, name:'철산센트럴자이', gu:'광명시', dong:'철산동', price:12.5, pyeong:34, area:84, year:2021, hh:798, km:9.2, mins:'차로 24분', color:'#F2B705' },
+      { id:302, name:'킨텍스원시티', gu:'고양시', dong:'일산서구', price:11.8, pyeong:38, area:99, year:2019, hh:1880, km:18.4, mins:'차로 35분', color:'#6AB7A8' },
+      { id:303, name:'한강신도시반도유보라', gu:'김포시', dong:'장기동', price:9.9, pyeong:35, area:84, year:2018, hh:1474, km:22.1, mins:'차로 41분', color:'#E8855B' },
+      { id:304, name:'광명푸르지오포레나', gu:'광명시', dong:'광명동', price:13.4, pyeong:33, area:84, year:2022, hh:1187, km:8.7, mins:'차로 22분', color:'#9C8AD6' },
+      { id:305, name:'중동센트럴파크푸르지오', gu:'부천시', dong:'중동', price:11.2, pyeong:36, area:84, year:2020, hh:999, km:14.6, mins:'차로 30분', color:'#7FA6E0' },
+    ],
+    seoul: [
+      { id:401, name:'마곡13단지힐스테이트', gu:'강서구', dong:'마곡동', price:13.4, pyeong:33, area:84, year:2017, hh:1194, km:12.5, mins:'차로 28분', color:'#F2B705' },
+      { id:402, name:'고덕그라시움', gu:'강동구', dong:'상일동', price:14.1, pyeong:34, area:84, year:2019, hh:4932, km:16.8, mins:'차로 33분', color:'#6AB7A8' },
+      { id:403, name:'답십리파크자이', gu:'동대문구', dong:'답십리동', price:12.7, pyeong:33, area:84, year:2019, hh:802, km:9.4, mins:'차로 22분', color:'#E8855B' },
+      { id:404, name:'길음래미안위브', gu:'성북구', dong:'길음동', price:12.9, pyeong:33, area:84, year:2016, hh:2003, km:8.1, mins:'차로 19분', color:'#9C8AD6' },
+      { id:405, name:'보라매자이더포레스트', gu:'동작구', dong:'신대방동', price:14.6, pyeong:34, area:84, year:2023, hh:959, km:7.3, mins:'차로 17분', color:'#7FA6E0' },
+    ],
+    custom: [
+      { id:501, name:'왕십리텐즈힐', gu:'성동구', dong:'하왕십리동', price:14.3, pyeong:33, area:84, year:2014, hh:1148, km:5.2, mins:'차로 14분', color:'#F2B705', region:'성동구' },
+      { id:502, name:'래미안옥수리버젠', gu:'성동구', dong:'옥수동', price:14.8, pyeong:34, area:84, year:2012, hh:1511, km:4.6, mins:'차로 13분', color:'#6AB7A8', region:'성동구' },
+      { id:503, name:'서울숲리버뷰자이', gu:'성동구', dong:'성수동', price:14.9, pyeong:34, area:84, year:2018, hh:1034, km:5.8, mins:'차로 15분', color:'#E8855B', region:'성동구' },
+      { id:504, name:'광진파크자이', gu:'광진구', dong:'자양동', price:13.7, pyeong:33, area:84, year:2020, hh:165, km:6.0, mins:'차로 16분', color:'#9C8AD6', region:'광진구' },
+      { id:505, name:'자양호반써밋플레이스', gu:'광진구', dong:'자양동', price:13.9, pyeong:33, area:84, year:2022, hh:707, km:6.4, mins:'차로 17분', color:'#7FA6E0', region:'광진구' },
+    ],
+  };
+
+  scopeMeta = {
+    dong:   { label:'우리 동네', area:'마포 아현 인근' },
+    gu:     { label:'우리 구',   area:'마포구 전역' },
+    city:   { label:'주변 시',   area:'광명·고양·김포·부천' },
+    seoul:  { label:'서울 전체', area:'서울시 전 지역' },
+  };
+
+  won(n){ const v=Math.abs(n); const t=Number.isInteger(v)?v:v.toFixed(1); return t+'억'; }
+
+  selectScope(k){ this.setState({ scope:k, visible:3 }); }
+  setSort(k){
+    this.setState(st=>{
+      const def = { diff:'asc', dist:'asc', area:'desc', year:'desc' }[k];
+      const dir = st.sort===k ? (st.sortDir==='asc'?'desc':'asc') : def;
+      return { sort:k, sortDir:dir, visible:3 };
+    });
+  }
+  getPool(scope, my){
+    const raw = scope.includes('/') ? (this.regionPools[scope]||[]) : (this.recPools[scope]||[]);
+    return raw.filter(r=>r.name!==my.name);
+  }
+  openRegion(){ this.setState({ regionOpen:true }); }
+  closeRegion(){ this.setState({ regionOpen:false }); }
+  setSido(sd){ this.setState({ sheetSido:sd }); }
+  toggleRegion(id, sido, gu){
+    this.setState(st=>{
+      const exists = st.addedRegions.some(a=>a.id===id);
+      if(exists){
+        const arr = st.addedRegions.filter(a=>a.id!==id);
+        return { addedRegions:arr, scope: st.scope===id ? 'seoul' : st.scope, visible:3 };
+      }
+      return { addedRegions:[...st.addedRegions, {id,sido,gu}], scope:id, visible:3 };
+    });
+  }
+  toggleLike(id){ this.setState(s=>({ liked:{...s.liked,[id]:!s.liked[id]} })); }
+  openSearch(){ this.setState({ searchOpen:true, q:'' }); }
+  closeSearch(){ this.setState({ searchOpen:false, q:'' }); }
+  onSearch(e){ this.setState({ q:e.target.value }); }
+  pickBase(id){ this.setState({ baseId:id, searchOpen:false, q:'', visible:3 }); }
+
+  renderVals(){
+    const s = this.state;
+    const my = this.baseApts.find(a=>a.id===s.baseId) || this.baseApts[0];
+    const order = ['dong','gu','city','seoul'];
+
+    const ACTIVE = 'flex:none;border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:800;padding:9px 15px;border-radius:13px;background:#FFD400;color:#1A1A1A;box-shadow:0 3px 9px rgba(255,212,0,.45);';
+    const INACTIVE = 'flex:none;border:1px solid #EAEAE4;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;padding:9px 15px;border-radius:13px;background:#fff;color:#76766E;';
+    const baseChips = order.map(k=>({ key:k, label:this.scopeMeta[k].label,
+      style: k===s.scope?ACTIVE:INACTIVE, onClick:()=>this.selectScope(k) }));
+    const addedChips = s.addedRegions.map(a=>({ key:a.id, label:a.gu,
+      style: a.id===s.scope?ACTIVE:INACTIVE, onClick:()=>this.selectScope(a.id) }));
+    const chips = [...baseChips, ...addedChips];
+
+    const dir = s.sortDir==='desc' ? -1 : 1;
+    const pool = this.getPool(s.scope, my).slice().sort((a,b)=>{
+      let v;
+      if(s.sort==='dist') v = a.km - b.km;
+      else if(s.sort==='area') v = a.pyeong - b.pyeong;
+      else if(s.sort==='year') v = a.year - b.year;
+      else v = Math.abs(a.price-my.price) - Math.abs(b.price-my.price);
+      return v * dir;
+    });
+    const visible = Math.min(s.visible, Math.max(3, pool.length));
+    const slice = pool.slice(0, visible);
+
+    const SON='flex:none;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:800;padding:6px 12px;border-radius:10px;background:#1A1A1A;color:#fff;';
+    const SOFF='flex:none;border:1px solid #EAEAE4;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:10px;background:#fff;color:#80807A;';
+    const sortChips = [['diff','가격차순'],['dist','거리순'],['area','평형순'],['year','준공순']].map(o=>{
+      const on = s.sort===o[0];
+      return { label: o[1] + (on ? (s.sortDir==='asc'?' ↑':' ↓') : ''),
+        style: on?SON:SOFF, onClick:()=>this.setSort(o[0]) };
+    });
+
+    const cards = slice.map(r=>{
+      const diff = +(r.price - my.price).toFixed(1);
+      const pos = diff>0;
+      const liked = !!s.liked[r.id];
+      const barW = Math.min(Math.round(Math.abs(diff)*52), 66);
+      const center = 70;
+      const barStyle = diff===0
+        ? `left:${center-1}px;width:2px;background:#C8C8C0;`
+        : (pos ? `left:${center}px;width:${barW}px;background:#E8552D;`
+               : `left:${center-barW}px;width:${barW}px;background:#16A06A;`);
+      return {
+        id:r.id, name:r.name,
+        loc:`${r.gu} ${r.dong}`,
+        dist:`직선 ${r.km}km · ${r.mins}`,
+        priceText:this.won(r.price),
+        diffText: diff===0 ? '내 관심과 동일' : (pos ? `${this.won(diff)} 높아요` : `${this.won(diff)} 저렴해요`),
+        diffColor: diff===0 ? '#8A8A82' : (pos ? '#E8552D' : '#16A06A'),
+        diffBg:    diff===0 ? '#F2F2EE' : (pos ? '#FBEAE2' : '#E2F5EC'),
+        diffShort: diff===0 ? '동일' : (pos ? `+${this.won(diff)}` : `-${this.won(diff)}`),
+        meta:`${r.pyeong}평(${r.area}㎡) · ${r.year}년 · ${r.hh.toLocaleString()}세대`,
+        thumbStyle:`background-color:${r.color}26;background-image:repeating-linear-gradient(135deg, ${r.color}3d 0 7px, transparent 7px 15px)`,
+        heart: liked?'♥':'♡',
+        heartColor: liked?'#FF4D4F':'#CFCFC8',
+        onLike:()=>this.toggleLike(r.id),
+        barStyle,
+      };
+    });
+
+    const showMore = pool.length > 3;
+    const allShown = visible >= pool.length;
+    const moreLabel = allShown ? '접기' : `더보기 · 남은 ${pool.length - visible}곳`;
+    const onMore = () => this.setState(st=>({ visible: st.visible>=pool.length ? 3 : st.visible+3 }));
+
+    const SIDON='flex:none;border:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:800;padding:8px 14px;border-radius:11px;background:#1A1A1A;color:#fff;';
+    const SIDOFF='flex:none;border:1px solid #EAEAE4;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:11px;background:#fff;color:#80807A;';
+    const sidoTabs = (this.sidos||[]).map(sd=>({ label:sd, style: sd===s.sheetSido?SIDON:SIDOFF, onClick:()=>this.setSido(sd) }));
+    const GUON='display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;border:1.5px solid #FFD400;background:#FFFBE6;cursor:pointer;font-family:inherit;padding:13px 14px;border-radius:14px;';
+    const GUOFF='display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;border:1px solid #EDEDE7;background:#fff;cursor:pointer;font-family:inherit;padding:13px 14px;border-radius:14px;';
+    const guList = Object.keys(this.RD[s.sheetSido]||{}).map(gu=>{
+      const id = s.sheetSido+'/'+gu;
+      const checked = s.addedRegions.some(a=>a.id===id);
+      return { label:gu, sub:`${(this.regionPools[id]||[]).length}개 단지`, checked,
+        style: checked?GUON:GUOFF, mark: checked?'✓':'＋', markColor: checked?'#C99A00':'#B8B8B0',
+        onClick:()=>this.toggleRegion(id, s.sheetSido, gu) };
+    });
+    const areaLabel = s.scope.includes('/') ? s.scope.replace('/',' ') : this.scopeMeta[s.scope].area;
+
+    const RSTYLE='display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #EFEFE9;background:#fff;border-radius:14px;padding:12px 14px;cursor:pointer;font-family:inherit;width:100%;';
+    const searchList = this.baseApts.filter(a=>a.name.includes(s.q)).map(a=>({
+      name:a.name, sub:`${a.gu} ${a.dong} · ${a.pyeong}평`, price:this.won(a.price),
+      rowStyle:RSTYLE, onPick:()=>this.pickBase(a.id),
+    }));
+
+    return {
+      myName:my.name, myPriceText:this.won(my.price),
+      myMeta:`${my.gu} ${my.dong} · ${my.pyeong}평 · ${my.year}년`,
+      chips, openRegion:()=>this.openRegion(),
+      subtitle:`${areaLabel} · 비슷한 가격대 ${pool.length}곳`,
+      cards, showMore, moreLabel, onMore, sortChips,
+      searchOpen:s.searchOpen, q:s.q, searchList,
+      openSearch:()=>this.openSearch(), closeSearch:()=>this.closeSearch(), onSearch:(e)=>this.onSearch(e),
+      regionOpen:s.regionOpen, sidoTabs, guList,
+      regionTitle: s.addedRegions.length>0 ? `지역 추가 · ${s.addedRegions.length}곳 선택됨` : '지역 추가',
+      closeRegion:()=>this.closeRegion(),
+    };
+  }
+}
+</script>
+</body>
+</html>
