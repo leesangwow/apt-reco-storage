@@ -31,19 +31,5 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: python scripts/load_csv.py --dir ./data/updates
 
-      - name: Move processed CSVs
-        run: |
-          mkdir -p data/processed
-          for f in data/updates/*.csv; do
-            [ -f "$f" ] || continue
-            date=$(date +%Y%m%d)
-            mv "$f" "data/processed/${date}_$(basename $f)"
-          done
-
-      - name: Commit processed files
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/updates/ data/processed/
-          git diff --staged --quiet || git commit -m "chore: move processed CSVs [$(date +%Y-%m-%d)]"
-          git push
+      - name: Print summary
+        run: echo "CSV 적재 완료. data/updates/ 의 파일을 수동으로 data/processed/ 로 이동 후 push 해주세요."
