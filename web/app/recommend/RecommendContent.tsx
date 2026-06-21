@@ -194,8 +194,9 @@ export default function RecommendContent() {
     ? getScopeChips(my.sido, my.gu).map(c => ({ ...c, active: c.key === scope && !regionId }))
     : [];
   const sortOptions: { key: SortKey; label: string }[] = [
-    { key: 'diff', label: '가격차순' }, { key: 'dist', label: '거리순' },
-    { key: 'area', label: '평형순' },   { key: 'year', label: '준공순' },
+    { key: 'diff', label: '가격차순' },
+    { key: 'area', label: '평형순' },
+    { key: 'year', label: '준공순' },
   ];
 
   return (
