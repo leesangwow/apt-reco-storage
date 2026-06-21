@@ -115,7 +115,7 @@ export default function LandingPage() {
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-[6px]">
-                          <span className="text-[15px] font-bold text-[#191919] truncate">{c.name}</span>
+                          <span className="text-[15px] font-bold text-[#191919] line-clamp-2 break-keep">{c.name}</span>
                           <span className="text-[10px] font-semibold text-[#C99A00] bg-[#FFF6D6] px-[5px] py-[1px] rounded-[4px] flex-none whitespace-nowrap">
                             {c.sido.replace('특별시','').replace('광역시','').replace('특별자치시','').replace('특별자치도','').replace('도','').replace('시','')}
                           </span>

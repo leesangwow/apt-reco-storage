@@ -230,7 +230,7 @@ export default function RecommendContent() {
               <div className="flex items-start justify-between gap-[10px]">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-[6px]">
-                    <div className="text-[18px] font-extrabold text-[#191919] tracking-tight truncate">{my.name}</div>
+                    <div className="text-[18px] font-extrabold text-[#191919] tracking-tight line-clamp-2 break-keep">{my.name}</div>
                     <button onClick={showToast} className="border-none cursor-pointer text-[12px] leading-none px-[5px] py-[2px] bg-[#F4F4F0] text-[#ADADA4] rounded-[5px] hover:bg-[#EAEAE4] transition-colors flex-none">›</button>
                   </div>
                   <div className="flex items-center gap-[6px] mt-[3px]">
@@ -365,7 +365,7 @@ export default function RecommendContent() {
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-[6px]">
-                        <span className="text-[14.5px] font-extrabold text-[#191919] truncate max-w-[120px]">{r.name}</span>
+                        <span className="text-[14.5px] font-extrabold text-[#191919] line-clamp-2 break-keep">{r.name}</span>
                         <button onClick={e => { e.stopPropagation(); showToast(); }}
                           className="border-none cursor-pointer text-[12px] leading-none px-[5px] py-[2px] bg-[#F4F4F0] text-[#ADADA4] rounded-[5px] hover:bg-[#EAEAE4] transition-colors flex-none">›</button>
                         <button onClick={e => { e.stopPropagation(); setLiked(l => ({ ...l, [r.id]: !l[r.id] })); }}
