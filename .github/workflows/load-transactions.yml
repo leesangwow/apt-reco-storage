@@ -36,8 +36,8 @@ jobs:
           mkdir -p data/processed
           for f in data/updates/*.csv; do
             [ -f "$f" ] || continue
-            month=$(date +%Y%m)
-            mv "$f" "data/processed/${month}_$(basename $f)"
+            date=$(date +%Y%m%d)
+            mv "$f" "data/processed/${date}_$(basename $f)"
           done
 
       - name: Commit processed files
