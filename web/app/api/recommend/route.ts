@@ -15,16 +15,26 @@ export async function GET(req: NextRequest) {
   const freshnessFilter = p.get('freshnessFilter');
   const regionId        = p.get('regionId');
 
-  // 기준 아파트
-  const { data: base, error: be } = await supabase
-    .from('apt_prices')
-    .select(COLS)
-    .eq('id', aptId)
-    .single();
+  // 가격대 탐색 모드
+  const priceMode = !aptId && !!p.get('price');
+  const priceParam = Number(p.get('price') ?? '0');
+  const sidoParam  = p.get('sido') ?? '';
+  const guParam    = p.get('gu')   ?? '';
 
-  if (be || !base) return NextResponse.json({ error: 'base apt not found' }, { status: 404 });
+  let base: { id: number; name: string; sido: string; gu: string; dong: string; pyeong: number; area_sqm: number; avg_price: number; year_built: number | null; hh: number | null; deal_count: number; latest_date: string; freshness: string; latest_price: number; latest_floor: number | null; latest_contract_date: string } | null = null;
+  let myPrice = priceParam;
 
-  const myPrice    = Number(base.avg_price);
+  if (!priceMode) {
+    const { data, error: be } = await supabase
+      .from('apt_prices')
+      .select(COLS)
+      .eq('id', aptId)
+      .single();
+    if (be || !data) return NextResponse.json({ error: 'base apt not found' }, { status: 404 });
+    base = data;
+    myPrice = Number(base.avg_price);
+  }
+
   const PRICE_BAND = band === '5%'  ? myPrice * 0.05
                    : band === '10%' ? myPrice * 0.1
                    : Number(band);
@@ -33,37 +43,47 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from('apt_prices')
     .select(COLS)
-    .neq('name', base.name)
     .gte('avg_price', myPrice - PRICE_BAND)
     .lte('avg_price', myPrice + PRICE_BAND);
 
+  if (base) query = query.neq('name', base.name);
+
   // 범위 필터
   if (regionId) {
-    // + 지역 칩: "시도/구" 형식
-    const [sido, gu] = regionId.split('/');
-    query = query.eq('sido', sido).eq('gu', gu);
+    if (regionId.includes('/')) {
+      // 시군구 단위: "서울특별시/강남구"
+      const [sido, gu] = regionId.split('/');
+      query = query.eq('sido', sido).eq('gu', gu);
+    } else {
+      // 시도 전체: "서울특별시"
+      query = query.eq('sido', regionId);
+    }
   } else {
+    // price 모드 기본 범위: 선택한 gu
+    const refSido = priceMode ? sidoParam : base!.sido;
+    const refGu   = priceMode ? guParam   : base!.gu;
+    const refDong = priceMode ? ''        : base!.dong;
+
     switch (scope) {
       case 'dong':
-        // 같은 동 (sido + gu + dong 모두 일치)
-        query = query.eq('sido', base.sido).eq('gu', base.gu).eq('dong', base.dong);
+        if (priceMode) {
+          query = query.eq('sido', refSido).eq('gu', refGu);
+        } else {
+          query = query.eq('sido', refSido).eq('gu', refGu).eq('dong', refDong);
+        }
         break;
       case 'gu':
-        // 같은 구/시 (광역시의 구, 또는 도 소속 시)
-        query = query.eq('sido', base.sido).eq('gu', base.gu);
+        query = query.eq('sido', refSido).eq('gu', refGu);
         break;
       case 'all':
-        // 시도 전체 (서울 전체 / 경기도 전체 등)
-        query = query.eq('sido', base.sido);
+        query = query.eq('sido', refSido);
         break;
       case 'neighbors':
-        // 인접 시도
-        const neighborSidos = NEIGHBORS[base.sido] ?? [];
+        const neighborSidos = NEIGHBORS[refSido] ?? [];
         if (neighborSidos.length > 0) {
           query = query.in('sido', neighborSidos);
         } else {
-          // 인접 없으면 sido 전체로 fallback
-          query = query.eq('sido', base.sido);
+          query = query.eq('sido', refSido);
         }
         break;
     }
@@ -101,7 +121,7 @@ export async function GET(req: NextRequest) {
 
   const total = sorted.length;
   const items = sorted.slice(0, (page + 1) * 3).map(r => ({
-    id: r.id, name: r.name, gu: r.gu, dong: r.dong,
+    id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
     price: Number(r.avg_price),
     pyeong: Math.round(Number(r.pyeong)),
     area: Math.round(Number(r.area_sqm)),
@@ -113,14 +133,18 @@ export async function GET(req: NextRequest) {
     latestContractDate: r.latest_contract_date,
   }));
 
-  return NextResponse.json({
-    base: {
-      id: base.id, name: base.name, sido: base.sido, gu: base.gu, dong: base.dong,
-      price: myPrice, pyeong: Math.round(Number(base.pyeong)),
-      area: Math.round(Number(base.area_sqm)), year: base.year_built, hh: base.hh,
-      dealCount: base.deal_count, latestDate: base.latest_date, freshness: base.freshness,
-      latestPrice: Number(base.latest_price), latestFloor: base.latest_floor, latestContractDate: base.latest_contract_date,
-    },
-    total, items,
-  });
+  const basePayload = priceMode
+    ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
+        pyeong: 0, area: 0, year: null, hh: null,
+        dealCount: 0, latestDate: '', freshness: 'fresh_high' as const,
+        latestPrice: 0, latestFloor: null, latestContractDate: '',
+        priceMode: true }
+    : { id: base!.id, name: base!.name, sido: base!.sido, gu: base!.gu, dong: base!.dong,
+        price: myPrice, pyeong: Math.round(Number(base!.pyeong)),
+        area: Math.round(Number(base!.area_sqm)), year: base!.year_built, hh: base!.hh,
+        dealCount: base!.deal_count, latestDate: base!.latest_date, freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
+        latestPrice: Number(base!.latest_price), latestFloor: base!.latest_floor, latestContractDate: base!.latest_contract_date,
+        priceMode: false };
+
+  return NextResponse.json({ base: basePayload, total, items });
 }

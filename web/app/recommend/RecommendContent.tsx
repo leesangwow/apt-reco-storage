@@ -18,11 +18,12 @@ interface BaseApt {
   price: number; pyeong: number; area: number; year: number | null; hh: number | null;
   dealCount: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
+  priceMode?: boolean;
 }
 type Freshness = 'fresh_high' | 'fresh_mid' | 'fresh_low' | 'scarce';
 
 interface RecItem {
-  id: number; name: string; gu: string; dong: string;
+  id: number; name: string; sido: string; gu: string; dong: string;
   price: number; pyeong: number; area: number; year: number | null; hh: number | null;
   km: number | null; mins: string | null;
   dealCount: number; latestDate: string; freshness: Freshness;
@@ -43,8 +44,12 @@ export default function RecommendContent() {
   const router = useRouter();
 
   const aptId = Number(searchParams.get('aptId') ?? '0');
+  const priceMode = !aptId && !!searchParams.get('price');
+  const priceParam = Number(searchParams.get('price') ?? '0');
+  const sidoParam  = searchParams.get('sido') ?? '';
+  const guParam    = searchParams.get('gu')   ?? '';
 
-  const [scope, setScope] = useState('gu');
+  const [scope, setScope] = useState(priceMode ? 'gu' : 'gu');
   const [sort, setSort] = useState<SortKey>('diff');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [page, setPage] = useState(0);
@@ -78,11 +83,13 @@ export default function RecommendContent() {
 
   // 추천 API 호출
   const fetchRecommend = useCallback(async () => {
-    if (!aptId) return;
+    if (!aptId && !priceMode) return;
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        aptId: String(aptId),
+        ...(priceMode
+          ? { price: String(priceParam), sido: sidoParam, gu: guParam }
+          : { aptId: String(aptId) }),
         scope,
         sort,
         dir: sortDir,
@@ -99,7 +106,7 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-  }, [aptId, scope, sort, sortDir, page, band, freshnessFilter, regionId]);
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -219,14 +226,27 @@ export default function RecommendContent() {
         <div className="px-[18px] pt-[8px] pb-[14px]">
           <div className="bg-white rounded-[20px] p-[15px_17px] shadow-[0_2px_10px_rgba(0,0,0,.04)]">
             <div className="flex justify-between items-center mb-[9px]">
-              <span className="text-[11px] font-extrabold text-[#C99A00] bg-[#FFF6D6] px-[9px] py-[4px] rounded-[8px]">기준 — 내 관심 아파트</span>
-              <button onClick={() => { setSearchOpen(true); setQ(''); setSelectedComplex(null); }}
+              <span className="text-[11px] font-extrabold text-[#C99A00] bg-[#FFF6D6] px-[9px] py-[4px] rounded-[8px]">
+                {my?.priceMode ? '기준 — 가격대 탐색' : '기준 — 내 관심 아파트'}
+              </span>
+              <button onClick={() => my?.priceMode ? router.push('/') : (setSearchOpen(true), setQ(''), setSelectedComplex(null))}
                 className="border-none bg-[#F2F2EE] text-[#3A3A36] text-[12px] font-bold px-[13px] py-[7px] rounded-[10px] cursor-pointer">
-                검색·변경
+                {my?.priceMode ? '변경' : '검색·변경'}
               </button>
             </div>
             {loading && !my ? (
               <div className="h-[52px] bg-[#F4F4F0] rounded-[12px] animate-pulse" />
+            ) : my?.priceMode ? (
+              /* 가격대 탐색 모드 카드 */
+              <div className="flex items-center justify-between gap-[10px]">
+                <div className="min-w-0">
+                  <div className="text-[18px] font-extrabold text-[#191919] tracking-tight">{won(my.price)}대</div>
+                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">{SIDO_SHORT[my.sido] ?? my.sido} {my.gu}</div>
+                </div>
+                <div className="text-right flex-none">
+                  <div className="text-[11px] text-[#ADADA4]">가격 기준 탐색</div>
+                </div>
+              </div>
             ) : my ? (
               <div className="flex items-start justify-between gap-[10px]">
                 <div className="min-w-0 flex-1">
@@ -270,7 +290,7 @@ export default function RecommendContent() {
           {addedRegions.map(a => (
             <button key={a.id} onClick={() => handleSelectScope(a.id, a.id)}
               className={`flex-none border cursor-pointer text-[13px] px-[15px] py-[9px] rounded-[13px] whitespace-nowrap transition-all ${regionId === a.id ? 'bg-[#FFD400] text-[#1A1A1A] font-extrabold border-transparent shadow-[0_3px_9px_rgba(255,212,0,.45)]' : 'border-[#EAEAE4] bg-white text-[#76766E] font-bold'}`}
-            >{a.gu}</button>
+            >{a.gu ? a.gu : `${SIDO_SHORT[a.sido] ?? a.sido} 전체`}</button>
           ))}
           <button onClick={() => setRegionOpen(true)} className="flex-none border border-dashed border-[#D2D2CA] bg-white cursor-pointer text-[13px] font-bold px-[14px] py-[9px] rounded-[13px] text-[#6E6E66] whitespace-nowrap">＋ 지역</button>
         </div>
@@ -278,7 +298,7 @@ export default function RecommendContent() {
         {/* Subtitle */}
         <div className="px-[22px] pb-[10px] text-[12.5px] text-[#8A8A82]">
           {regionId
-            ? regionId.replace('/', ' ')
+            ? (regionId.includes('/') ? regionId.replace('/', ' ') : `${SIDO_SHORT[regionId] ?? regionId} 전체`)
             : scopeChips.find(c => c.key === scope)?.label ?? ''
           } · 가격차 {band === '5%' ? '5% 이내' : band === '10%' ? '10% 이내' : `${band}억 이내`} · {total}곳
         </div>
@@ -376,7 +396,7 @@ export default function RecommendContent() {
                         </button>
                       </div>
                       <div className="text-[11px] text-[#9A9A92] mt-[2px]">
-                        {r.gu} {r.dong}{r.km ? ` · 직선 ${r.km}km · ${r.mins}` : ''}
+                        {SIDO_SHORT[r.sido] ?? r.sido} {r.gu} {r.dong}{r.km ? ` · 직선 ${r.km}km · ${r.mins}` : ''}
                       </div>
                     </div>
                   </div>
@@ -460,6 +480,34 @@ export default function RecommendContent() {
               {sheetSido && (
                 <>
                   <div className="text-[12px] font-bold text-[#A0A098] mb-[10px]">{sheetSido} · 시군구 선택</div>
+                  {/* 시도 전체 선택 버튼 */}
+                  {(() => {
+                    const sidoChecked = addedRegions.some(a => a.id === sheetSido);
+                    return (
+                      <button
+                        onClick={() => {
+                          setAddedRegions(prev => {
+                            const exists = prev.some(a => a.id === sheetSido);
+                            if (exists) {
+                              if (regionId === sheetSido) { setScope('gu'); setRegionId(null); }
+                              return prev.filter(a => a.id !== sheetSido);
+                            }
+                            setRegionId(sheetSido);
+                            setScope(sheetSido);
+                            setPage(0);
+                            return [...prev, { id: sheetSido, sido: sheetSido, gu: '' }];
+                          });
+                        }}
+                        className={`flex justify-between items-center w-full cursor-pointer px-[14px] py-[13px] rounded-[14px] mb-[9px] ${sidoChecked ? 'border-[1.5px] border-[#FFD400] bg-[#FFFBE6]' : 'border border-[#EAEAE4] bg-[#F8F8F6]'}`}
+                      >
+                        <div className="text-left">
+                          <div className="text-[14.5px] font-extrabold text-[#191919]">{SIDO_SHORT[sheetSido] ?? sheetSido} 전체</div>
+                          <div className="text-[11.5px] text-[#9A9A92] mt-[1px]">시군구 구분 없이 전체 검색</div>
+                        </div>
+                        <span className="text-[18px] font-extrabold" style={{ color: sidoChecked ? '#C99A00' : '#B8B8B0' }}>{sidoChecked ? '✓' : '＋'}</span>
+                      </button>
+                    );
+                  })()}
                   {guLoading ? (
                     <div className="text-center text-[13px] text-[#ADADA4] py-[20px]">불러오는 중...</div>
                   ) : (

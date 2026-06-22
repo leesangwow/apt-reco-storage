@@ -3,33 +3,52 @@ name: Load Transaction CSV
 on:
   push:
     paths:
-      - 'data/updates/*.csv'
+      - 'data/updates/buy/*.csv'
+      - 'data/updates/rent/*.csv'
 
 jobs:
-  load:
+  load-buy:
+    if: contains(toJson(github.event.commits), 'data/updates/buy/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install pandas psycopg2-binary python-dotenv tqdm
-
-      - name: Load CSVs to Supabase
+      - name: Load buy CSVs
         env:
           SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
           SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
           SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
           SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python scripts/load_csv.py --dir ./data/updates
-
+        run: python scripts/load_csv.py --dir ./data/updates/buy
       - name: Print summary
-        run: echo "CSV 적재 완료. data/updates/ 의 파일을 수동으로 data/processed/ 로 이동 후 push 해주세요."
+        run: echo "[매매] 적재 완료. data/updates/buy/ 파일을 data/processed/buy/ 로 이동해주세요."
+
+  load-rent:
+    if: contains(toJson(github.event.commits), 'data/updates/rent/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install pandas psycopg2-binary python-dotenv tqdm
+      - name: Load rent CSVs
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: python scripts/load_rent_csv.py --dir ./data/updates/rent
+      - name: Print summary
+        run: echo "[전세] 적재 완료. data/updates/rent/ 파일을 data/processed/rent/ 로 이동해주세요."
