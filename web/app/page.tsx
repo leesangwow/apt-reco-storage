@@ -26,10 +26,12 @@ interface Complex {
 
 type Tab = 'name' | 'price';
 type NameStep = 'search' | 'pyeong';
+type DealMode = 'buy' | 'rent';
 
 export default function LandingPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('name');
+  const [dealMode, setDealMode] = useState<DealMode>('buy');
 
   // 아파트명 검색
   const [q, setQ] = useState('');
@@ -95,7 +97,7 @@ export default function LandingPage() {
 
   function handleSelectComplex(c: Complex) {
     if (c.variants.length === 1) {
-      router.push(`/recommend?aptId=${c.variants[0].aptId}`);
+      router.push(`/recommend?aptId=${c.variants[0].aptId}&deal=${dealMode}`);
       return;
     }
     setSelectedComplex(c);
@@ -103,7 +105,7 @@ export default function LandingPage() {
   }
 
   function handleSelectPyeong(aptId: number) {
-    router.push(`/recommend?aptId=${aptId}`);
+    router.push(`/recommend?aptId=${aptId}&deal=${dealMode}`);
   }
 
   function handlePriceSearch() {
@@ -113,7 +115,8 @@ export default function LandingPage() {
     const params = new URLSearchParams({
       price: String(price),
       sido: selectedSido,
-      gu: selectedGu,
+      gu: selectedGu === '전체' ? '' : selectedGu,
+      deal: dealMode,
     });
     router.push(`/recommend?${params.toString()}`);
   }
@@ -126,7 +129,21 @@ export default function LandingPage() {
       {/* Logo */}
       <div className="mb-[48px] text-center">
         <div className="text-[28px] font-extrabold text-[#191919] tracking-tight leading-tight mb-[8px]">비슷한집</div>
-        <div className="text-[14px] text-[#8A8A82] font-medium">관심 아파트와 가격대가 닮은 단지를 찾아드려요</div>
+        <div className="flex items-center gap-[4px] text-[14px] text-[#8A8A82] font-medium flex-wrap justify-center">
+          <span>관심 아파트와</span>
+          <div className="relative">
+            <select
+              value={dealMode}
+              onChange={e => setDealMode(e.target.value as DealMode)}
+              className="appearance-none bg-[#EAEAE4] text-[#3A3A36] font-bold text-[14px] px-[8px] pr-[20px] py-[1px] rounded-[6px] cursor-pointer border-none outline-none"
+            >
+              <option value="buy">매매가</option>
+              <option value="rent">전세가</option>
+            </select>
+            <span className="absolute right-[5px] top-1/2 -translate-y-1/2 text-[10px] text-[#8A8A82] pointer-events-none">▾</span>
+          </div>
+          <span>닮은 단지를 찾아드려요</span>
+        </div>
       </div>
 
       <div className="w-full max-w-[390px]">
@@ -269,6 +286,10 @@ export default function LandingPage() {
                     <div className="text-center text-[13px] text-[#ADADA4] py-[12px]">불러오는 중...</div>
                   ) : (
                     <div className="grid grid-cols-2 gap-[6px] max-h-[200px] overflow-y-auto">
+                      <button onClick={() => setSelectedGu('전체')}
+                        className={`col-span-2 border cursor-pointer text-[13px] px-[12px] py-[9px] rounded-[11px] text-left transition-all font-extrabold ${selectedGu === '전체' ? 'bg-[#FFD400] text-[#1A1A1A] border-transparent' : 'border-[#EAEAE4] bg-[#F8F8F6] text-[#3A3A36]'}`}>
+                        {SIDO_SHORT[selectedSido] ?? selectedSido} 전체
+                      </button>
                       {guList.map(({ gu }) => (
                         <button key={gu} onClick={() => setSelectedGu(gu)}
                           className={`border cursor-pointer text-[13px] px-[12px] py-[9px] rounded-[11px] text-left transition-all ${selectedGu === gu ? 'bg-[#FFD400] text-[#1A1A1A] font-extrabold border-transparent' : 'border-[#EAEAE4] bg-white text-[#3A3A36] font-semibold'}`}>
@@ -285,7 +306,9 @@ export default function LandingPage() {
                 onClick={handlePriceSearch}
                 disabled={!priceReady}
                 className={`w-full py-[14px] rounded-[15px] text-[15px] font-extrabold transition-all border-none cursor-pointer ${priceReady ? 'bg-[#FFD400] text-[#1A1A1A]' : 'bg-[#F2F2EE] text-[#ADADA4] cursor-not-allowed'}`}>
-                {priceReady ? `${priceInput}억대 · ${SIDO_SHORT[selectedSido] ?? selectedSido} ${selectedGu} 탐색` : '금액과 지역을 선택해주세요'}
+                {priceReady
+                  ? `${priceInput}억대 · ${SIDO_SHORT[selectedSido] ?? selectedSido}${selectedGu === '전체' ? ' 전체' : ` ${selectedGu}`} 탐색`
+                  : '금액과 지역을 선택해주세요'}
               </button>
 
             </div>

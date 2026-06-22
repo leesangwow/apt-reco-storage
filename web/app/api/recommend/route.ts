@@ -60,20 +60,25 @@ export async function GET(req: NextRequest) {
     }
   } else {
     // price 모드 기본 범위: 선택한 gu
-    const refSido = priceMode ? sidoParam : base!.sido;
-    const refGu   = priceMode ? guParam   : base!.gu;
-    const refDong = priceMode ? ''        : base!.dong;
+    const refSido    = priceMode ? sidoParam : base!.sido;
+    const refGu      = priceMode ? guParam   : base!.gu;
+    const refDong    = priceMode ? ''        : base!.dong;
+    const sidoOnly   = priceMode && !refGu;
 
     switch (scope) {
       case 'dong':
-        if (priceMode) {
+        if (sidoOnly) {
+          query = query.eq('sido', refSido);
+        } else if (priceMode) {
           query = query.eq('sido', refSido).eq('gu', refGu);
         } else {
           query = query.eq('sido', refSido).eq('gu', refGu).eq('dong', refDong);
         }
         break;
       case 'gu':
-        query = query.eq('sido', refSido).eq('gu', refGu);
+        query = sidoOnly
+          ? query.eq('sido', refSido)
+          : query.eq('sido', refSido).eq('gu', refGu);
         break;
       case 'all':
         query = query.eq('sido', refSido);

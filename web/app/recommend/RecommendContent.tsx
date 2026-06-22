@@ -49,6 +49,10 @@ export default function RecommendContent() {
   const sidoParam  = searchParams.get('sido') ?? '';
   const guParam    = searchParams.get('gu')   ?? '';
 
+  const [dealMode, setDealMode] = useState<'buy' | 'rent'>(
+    searchParams.get('deal') === 'rent' ? 'rent' : 'buy'
+  );
+
   const [scope, setScope] = useState(priceMode ? 'gu' : 'gu');
   const [sort, setSort] = useState<SortKey>('diff');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -98,7 +102,8 @@ export default function RecommendContent() {
         ...(freshnessFilter ? { freshnessFilter } : {}),
         ...(regionId ? { regionId } : {}),
       });
-      const res = await fetch(`/api/recommend?${params}`);
+      const endpoint = dealMode === 'rent' ? '/api/rent' : '/api/recommend';
+      const res = await fetch(`${endpoint}?${params}`);
       const json = await res.json();
       setData(json);
     } catch (e) {
@@ -106,7 +111,7 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId]);
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId, dealMode]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -222,12 +227,22 @@ export default function RecommendContent() {
           </button>
         </div>
 
+        {/* 매매/전세 스위치 */}
+        <div className="flex bg-[#EAEAE4] rounded-[12px] p-[3px] mx-[18px] mb-[10px]">
+          {(['buy', 'rent'] as const).map(m => (
+            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); }}
+              className={`flex-1 text-[13px] font-bold py-[7px] rounded-[9px] transition-all cursor-pointer border-none ${dealMode === m ? 'bg-white text-[#191919] shadow-sm' : 'bg-transparent text-[#8A8A82]'}`}>
+              {m === 'buy' ? '매매' : '전세'}
+            </button>
+          ))}
+        </div>
+
         {/* My apartment header */}
         <div className="px-[18px] pt-[8px] pb-[14px]">
           <div className="bg-white rounded-[20px] p-[15px_17px] shadow-[0_2px_10px_rgba(0,0,0,.04)]">
             <div className="flex justify-between items-center mb-[9px]">
               <span className="text-[11px] font-extrabold text-[#C99A00] bg-[#FFF6D6] px-[9px] py-[4px] rounded-[8px]">
-                {my?.priceMode ? '기준 — 가격대 탐색' : '기준 — 내 관심 아파트'}
+                {my?.priceMode ? '기준 — 가격대 탐색' : dealMode === 'rent' ? '기준 — 전세 시세' : '기준 — 내 관심 아파트'}
               </span>
               <button onClick={() => my?.priceMode ? router.push('/') : (setSearchOpen(true), setQ(''), setSelectedComplex(null))}
                 className="border-none bg-[#F2F2EE] text-[#3A3A36] text-[12px] font-bold px-[13px] py-[7px] rounded-[10px] cursor-pointer">
@@ -413,7 +428,7 @@ export default function RecommendContent() {
                   {/* 최근 실거래 */}
                   <div className="flex items-center justify-between mb-[5px]">
                     <span className="text-[11px] text-[#ADADA4]">
-                      최근 거래
+                      {dealMode === 'rent' ? '최근 전세' : '최근 거래'}
                       {r.latestFloor ? ` · ${r.latestFloor}층` : ''}
                       {' · '}{r.latestContractDate?.slice(0, 7).replace('-', '.')}
                     </span>
