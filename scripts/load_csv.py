@@ -167,6 +167,7 @@ def load_to_db(df: pd.DataFrame, conn):
 
     # 1단계: 고유 단지 일괄 upsert
     print("  단지 upsert 중...")
+    df["area_sqm"] = df["area_sqm"].round(2)
     unique_apts = df.drop_duplicates(subset=["name", "gu", "dong", "area_sqm"])
     apt_rows = [
         (row["name"], row["sido"], row["gu"], row["dong"],
