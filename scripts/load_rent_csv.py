@@ -141,35 +141,64 @@ def insert_rent_transactions(cur, rows: list[tuple]):
 
 def load_to_db(df: pd.DataFrame, conn):
     cur = conn.cursor()
-    apt_cache: dict[tuple, int] = {}
-    tx_rows = []
 
+    # 1단계: 고유 단지 목록 추출 후 일괄 upsert
+    print("  단지 upsert 중...")
+    unique_apts = df.drop_duplicates(subset=["name", "gu", "dong", "area_sqm"])
+    apt_rows = [
+        (row["name"], row["sido"], row["gu"], row["dong"],
+         row["address"], float(row["area_sqm"]),
+         int(row["year_built"]) if pd.notna(row["year_built"]) else None)
+        for _, row in unique_apts.iterrows()
+    ]
+    psycopg2.extras.execute_values(
+        cur,
+        """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
+           values %s
+           on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
+           returning id, name, gu, dong, area_sqm""",
+        apt_rows, page_size=200,
+    )
+    returned = cur.fetchall()
+    conn.commit()
+
+    # 2단계: ID 캐시 구성
+    apt_cache: dict[tuple, int] = {}
+    for row in returned:
+        apt_id, name, gu, dong, area = row
+        apt_cache[(name, gu, dong, float(area))] = apt_id
+
+    # 캐시에 없는 항목은 DB에서 조회
+    missing_keys = [
+        (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
+        for _, row in unique_apts.iterrows()
+        if (row["name"], row["gu"], row["dong"], float(row["area_sqm"])) not in apt_cache
+    ]
+    if missing_keys:
+        for key in missing_keys:
+            cur.execute(SELECT_APT, key)
+            res = cur.fetchone()
+            if res:
+                apt_cache[key] = res[0]
+
+    # 3단계: 거래 일괄 insert
+    print("  거래 insert 중...")
+    tx_rows = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
         key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
-
-        if key not in apt_cache:
-            cur.execute(UPSERT_APT, (
-                row["name"], row["sido"], row["gu"], row["dong"],
-                row["address"], float(row["area_sqm"]),
-                int(row["year_built"]) if pd.notna(row["year_built"]) else None,
-            ))
-            result = cur.fetchone()
-            if result is None:
-                cur.execute(SELECT_APT, (row["name"], row["gu"], row["dong"], float(row["area_sqm"])))
-                result = cur.fetchone()
-            apt_cache[key] = result[0]
-
+        apt_id = apt_cache.get(key)
+        if not apt_id:
+            continue
         tx_rows.append((
-            apt_cache[key],
+            apt_id,
             row["contract_date"],
             int(row["deposit_man"]),
             int(row["monthly_man"]),
             row["deal_type"],
-            row["contract_type"] if pd.notna(row.get("contract_type", None)) else None,
+            row["contract_type"] if pd.notna(row.get("contract_type", pd.NA)) else None,
             row["floor"],
-            row["contract_period"] if pd.notna(row.get("contract_period", None)) else None,
+            row["contract_period"] if pd.notna(row.get("contract_period", pd.NA)) else None,
         ))
-
         if len(tx_rows) >= 1000:
             insert_rent_transactions(cur, tx_rows)
             tx_rows.clear()
