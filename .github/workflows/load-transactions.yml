@@ -8,7 +8,6 @@ on:
 
 jobs:
   load-buy:
-    if: contains(toJson(github.event.commits), 'data/updates/buy/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,7 +30,6 @@ jobs:
         run: echo "[매매] 적재 완료. data/updates/buy/ 파일을 data/processed/buy/ 로 이동해주세요."
 
   load-rent:
-    if: contains(toJson(github.event.commits), 'data/updates/rent/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
