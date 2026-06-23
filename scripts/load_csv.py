@@ -143,6 +143,10 @@ on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
 returning id;
 """
 
+SELECT_APT = """
+select id from apts where name=%s and gu=%s and dong=%s and area_sqm=%s;
+"""
+
 INSERT_TX = """
 insert into transactions (apt_id, contract_date, price_man, floor, deal_type)
 values %s
