@@ -15,16 +15,26 @@ export async function GET(req: NextRequest) {
   const freshnessFilter = p.get('freshnessFilter');
   const regionId        = p.get('regionId');
 
-  // 기준 아파트 (apt_rent_prices 뷰에서 조회)
-  const { data: base, error: be } = await supabase
-    .from('apt_rent_prices')
-    .select(COLS)
-    .eq('id', aptId)
-    .single();
+  // 가격대 탐색 모드
+  const priceMode  = !aptId && !!p.get('price');
+  const priceParam = Number(p.get('price') ?? '0');
+  const sidoParam  = p.get('sido') ?? '';
+  const guParam    = p.get('gu')   ?? '';
 
-  if (be || !base) return NextResponse.json({ error: 'base apt not found in rent data' }, { status: 404 });
+  let base: Record<string, unknown> | null = null;
+  let myPrice = priceParam;
 
-  const myPrice    = Number(base.avg_deposit);
+  if (!priceMode) {
+    const { data, error: be } = await supabase
+      .from('apt_rent_prices')
+      .select(COLS)
+      .eq('id', aptId)
+      .single();
+    if (be || !data) return NextResponse.json({ error: 'base apt not found in rent data' }, { status: 404 });
+    base = data;
+    myPrice = Number(base.avg_deposit);
+  }
+
   const PRICE_BAND = band === '5%'  ? myPrice * 0.05
                    : band === '10%' ? myPrice * 0.1
                    : Number(band);
@@ -32,9 +42,16 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from('apt_rent_prices')
     .select(COLS)
-    .neq('name', base.name)
     .gte('avg_deposit', myPrice - PRICE_BAND)
     .lte('avg_deposit', myPrice + PRICE_BAND);
+
+  if (base) query = query.neq('name', String(base.name));
+
+  // 범위 기준값
+  const refSido = priceMode ? sidoParam : String(base!.sido);
+  const refGu   = priceMode ? guParam   : String(base!.gu);
+  const refDong = priceMode ? ''        : String(base!.dong);
+  const sidoOnly = priceMode && !refGu;
 
   // 범위 필터
   if (regionId) {
@@ -47,19 +64,23 @@ export async function GET(req: NextRequest) {
   } else {
     switch (scope) {
       case 'dong':
-        query = query.eq('sido', base.sido).eq('gu', base.gu).eq('dong', base.dong);
+        if (sidoOnly) query = query.eq('sido', refSido);
+        else if (priceMode) query = query.eq('sido', refSido).eq('gu', refGu);
+        else query = query.eq('sido', refSido).eq('gu', refGu).eq('dong', refDong);
         break;
       case 'gu':
-        query = query.eq('sido', base.sido).eq('gu', base.gu);
+        query = (sidoOnly || !refGu)
+          ? query.eq('sido', refSido)
+          : query.eq('sido', refSido).eq('gu', refGu);
         break;
       case 'all':
-        query = query.eq('sido', base.sido);
+        query = query.eq('sido', refSido);
         break;
       case 'neighbors':
-        const neighborSidos = NEIGHBORS[base.sido] ?? [];
+        const neighborSidos = NEIGHBORS[refSido] ?? [];
         query = neighborSidos.length > 0
           ? query.in('sido', neighborSidos)
-          : query.eq('sido', base.sido);
+          : query.eq('sido', refSido);
         break;
     }
   }
@@ -109,21 +130,23 @@ export async function GET(req: NextRequest) {
     latestContractDate: r.latest_contract_date,
   }));
 
+  const basePayload = priceMode
+    ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
+        pyeong: 0, area: 0, year: null, hh: null,
+        dealCount: 0, latestDate: '', freshness: 'fresh_high' as const,
+        latestPrice: 0, latestFloor: null, latestContractDate: '',
+        priceMode: true }
+    : { id: Number(base!.id), name: String(base!.name), sido: String(base!.sido),
+        gu: String(base!.gu), dong: String(base!.dong), price: myPrice,
+        pyeong: Math.round(Number(base!.pyeong)), area: Math.round(Number(base!.area_sqm)),
+        year: base!.year_built as number | null, hh: base!.hh as number | null,
+        dealCount: base!.deal_count as number, latestDate: String(base!.latest_date),
+        freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
+        latestPrice: Number(base!.latest_deposit), latestFloor: null,
+        latestContractDate: String(base!.latest_contract_date), priceMode: false };
+
   return NextResponse.json({
-    base: {
-      id: base.id, name: base.name, sido: base.sido, gu: base.gu, dong: base.dong,
-      price: myPrice,
-      pyeong: Math.round(Number(base.pyeong)),
-      area: Math.round(Number(base.area_sqm)),
-      year: base.year_built, hh: base.hh,
-      dealCount: base.deal_count,
-      latestDate: base.latest_date,
-      freshness: base.freshness,
-      latestPrice: Number(base.latest_deposit),
-      latestFloor: null,
-      latestContractDate: base.latest_contract_date,
-      priceMode: false,
-    },
+    base: basePayload,
     total, items,
   });
 }

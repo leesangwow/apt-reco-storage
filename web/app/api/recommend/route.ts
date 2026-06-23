@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
         }
         break;
       case 'gu':
-        query = sidoOnly
+        query = (sidoOnly || !refGu)
           ? query.eq('sido', refSido)
           : query.eq('sido', refSido).eq('gu', refGu);
         break;

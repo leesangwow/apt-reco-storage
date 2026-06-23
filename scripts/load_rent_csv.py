@@ -143,32 +143,34 @@ def load_to_db(df: pd.DataFrame, conn):
     cur = conn.cursor()
 
     # 1단계: 고유 단지 목록 추출 후 일괄 upsert
-    print("  단지 upsert 중...")
+    print("  단지 upsert 중...", flush=True)
     df["area_sqm"] = df["area_sqm"].round(2)
     unique_apts = df.drop_duplicates(subset=["name", "gu", "dong", "area_sqm"])
+    print(f"  고유 단지 수: {len(unique_apts):,}", flush=True)
     apt_rows = [
         (row["name"], row["sido"], row["gu"], row["dong"],
          row["address"], float(row["area_sqm"]),
          int(row["year_built"]) if pd.notna(row["year_built"]) else None)
         for _, row in unique_apts.iterrows()
     ]
-    psycopg2.extras.execute_values(
-        cur,
-        """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
-           values %s
-           on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
-           returning id, name, gu, dong, area_sqm""",
-        apt_rows, page_size=200,
-    )
-    returned = cur.fetchall()
-    conn.commit()
-
-    # 2단계: ID 캐시 구성
+    # 500개씩 나눠서 upsert (대용량 배치 방지)
     apt_cache: dict[tuple, int] = {}
-    for row in returned:
-        apt_id, name, gu, dong, area = row
-        apt_cache[(name, gu, dong, float(area))] = apt_id
-
+    BATCH = 500
+    for i in range(0, len(apt_rows), BATCH):
+        batch = apt_rows[i:i+BATCH]
+        print(f"  단지 배치 {i//BATCH+1}/{(len(apt_rows)-1)//BATCH+1} ...", flush=True)
+        psycopg2.extras.execute_values(
+            cur,
+            """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
+               values %s
+               on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
+               returning id, name, gu, dong, area_sqm""",
+            batch, page_size=500,
+        )
+        for row in cur.fetchall():
+            apt_id, name, gu, dong, area = row
+            apt_cache[(name, gu, dong, float(area))] = apt_id
+        conn.commit()
     # 캐시에 없는 항목은 DB에서 조회
     missing_keys = [
         (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
@@ -183,7 +185,7 @@ def load_to_db(df: pd.DataFrame, conn):
                 apt_cache[key] = res[0]
 
     # 3단계: 거래 일괄 insert
-    print("  거래 insert 중...")
+    print("  거래 insert 중...", flush=True)
     tx_rows = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
         key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
@@ -217,12 +219,16 @@ def load_to_db(df: pd.DataFrame, conn):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="./data/updates/rent")
+    parser.add_argument("--file", default=None, help="특정 파일만 처리")
     args = parser.parse_args()
 
-    csv_files = sorted(set(
-        glob.glob(os.path.join(args.dir, "**/*.csv"), recursive=True) +
-        glob.glob(os.path.join(args.dir, "*.csv"))
-    ))
+    if args.file:
+        csv_files = [args.file]
+    else:
+        csv_files = sorted(set(
+            glob.glob(os.path.join(args.dir, "**/*.csv"), recursive=True) +
+            glob.glob(os.path.join(args.dir, "*.csv"))
+        ))
 
     if not csv_files:
         print(f"CSV 파일을 찾을 수 없습니다: {args.dir}")

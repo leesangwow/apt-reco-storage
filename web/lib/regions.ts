@@ -73,7 +73,7 @@ export function getScopeChips(sido: string, gu: string): ScopeChip[] {
 
   return [
     { key: 'dong',      label: '우리 동네' },
-    { key: 'gu',        label: gu },
+    ...(gu ? [{ key: 'gu', label: gu }] : []),
     { key: 'all',       label: `${sidoShort} 전체` },
     ...(neighbors.length > 0 ? [{ key: 'neighbors', label: neighborLabel }] : []),
   ];

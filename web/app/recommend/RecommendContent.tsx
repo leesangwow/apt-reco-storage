@@ -256,7 +256,7 @@ export default function RecommendContent() {
               <div className="flex items-center justify-between gap-[10px]">
                 <div className="min-w-0">
                   <div className="text-[18px] font-extrabold text-[#191919] tracking-tight">{won(my.price)}대</div>
-                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">{SIDO_SHORT[my.sido] ?? my.sido} {my.gu}</div>
+                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">{SIDO_SHORT[my.sido] ?? my.sido}{my.gu ? ` ${my.gu}` : ' 전체'}</div>
                 </div>
                 <div className="text-right flex-none">
                   <div className="text-[11px] text-[#ADADA4]">가격 기준 탐색</div>
