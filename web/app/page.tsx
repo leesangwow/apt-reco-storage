@@ -4,6 +4,54 @@ import { Suspense, useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { SIDO_SHORT } from '@/lib/regions';
 
+function DealDropdown({ value, onChange }: { value: DealMode; onChange: (v: DealMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const options: { value: DealMode; label: string; bg: string; text: string }[] = [
+    { value: 'buy',  label: '매매가', bg: '#FFF6D6', text: '#C99A00' },
+    { value: 'rent', label: '전세가', bg: '#EBF3FF', text: '#3B7DD8' },
+  ];
+  const current = options.find(o => o.value === value)!;
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ backgroundColor: current.bg, color: current.text }}
+        className="flex items-center gap-[4px] font-extrabold text-[14px] px-[8px] py-[1px] rounded-[6px] cursor-pointer border-none outline-none transition-colors"
+      >
+        {current.label}
+        <span className="text-[10px]">{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <div className="absolute top-[calc(100%+4px)] left-0 bg-white rounded-[10px] shadow-[0_4px_16px_rgba(0,0,0,.12)] overflow-hidden z-50 min-w-full">
+          {options.map(o => (
+            <button
+              key={o.value}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              style={o.value === value ? { backgroundColor: o.bg, color: o.text } : {}}
+              className={`w-full text-left px-[12px] py-[8px] text-[13px] font-bold cursor-pointer border-none transition-colors ${
+                o.value === value ? '' : 'bg-white text-[#3A3A36] hover:bg-[#FAFAF8]'
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SIDO_ORDER = [
   '서울특별시', '경기도', '인천광역시', '부산광역시', '대구광역시',
   '대전광역시', '광주광역시', '울산광역시', '세종특별자치시',
@@ -132,17 +180,7 @@ function LandingContent() {
         <div className="text-[28px] font-extrabold text-[#191919] tracking-tight leading-tight mb-[8px]">비슷한집</div>
         <div className="flex items-center gap-[4px] text-[14px] text-[#8A8A82] font-medium flex-wrap justify-center">
           <span>관심 아파트와</span>
-          <div className="relative">
-            <select
-              value={dealMode}
-              onChange={e => setDealMode(e.target.value as DealMode)}
-              className="appearance-none bg-[#EAEAE4] text-[#3A3A36] font-bold text-[14px] px-[8px] pr-[20px] py-[1px] rounded-[6px] cursor-pointer border-none outline-none"
-            >
-              <option value="buy">매매가</option>
-              <option value="rent">전세가</option>
-            </select>
-            <span className="absolute right-[5px] top-1/2 -translate-y-1/2 text-[10px] text-[#8A8A82] pointer-events-none">▾</span>
-          </div>
+          <DealDropdown value={dealMode} onChange={setDealMode} />
           <span>닮은 단지를 찾아드려요</span>
         </div>
       </div>

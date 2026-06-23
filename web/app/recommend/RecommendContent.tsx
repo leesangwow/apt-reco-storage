@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { SortKey, SortDir, AddedRegion } from '../types';
 import { getScopeChips, SIDO_SHORT, NEIGHBOR_LABEL } from '@/lib/regions';
@@ -65,6 +65,8 @@ export default function RecommendContent() {
 
   const [data, setData] = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [noRentData, setNoRentData] = useState(false);
+  const lastBaseRef = useRef<BaseApt | null>(null); // 마지막으로 성공한 기준 아파트 캐시
 
   const [liked, setLiked] = useState<Record<number, boolean>>({});
   const [searchOpen, setSearchOpen] = useState(false);
@@ -89,7 +91,8 @@ export default function RecommendContent() {
   const fetchRecommend = useCallback(async () => {
     if (!aptId && !priceMode) return;
     setLoading(true);
-    setData(null); // 탭 전환 시 이전 데이터 즉시 초기화
+    setData(null);
+    setNoRentData(false);
     try {
       const params = new URLSearchParams({
         ...(priceMode
@@ -106,11 +109,12 @@ export default function RecommendContent() {
       const endpoint = dealMode === 'rent' ? '/api/rent' : '/api/recommend';
       const res = await fetch(`${endpoint}?${params}`);
       if (!res.ok) {
-        console.error('API error:', res.status, await res.text());
+        if (res.status === 404 && dealMode === 'rent') setNoRentData(true);
         return;
       }
       const json = await res.json();
       setData(json);
+      if (json.base) lastBaseRef.current = json.base;
     } catch (e) {
       console.error(e);
     } finally {
@@ -235,7 +239,7 @@ export default function RecommendContent() {
         {/* 매매/전세 스위치 */}
         <div className="flex bg-[#EAEAE4] rounded-[12px] p-[3px] mx-[18px] mb-[10px]">
           {(['buy', 'rent'] as const).map(m => (
-            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); setData(null); }}
+            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); setData(null); setNoRentData(false); }}
               className={`flex-1 text-[13px] font-bold py-[7px] rounded-[9px] transition-all cursor-pointer border-none ${dealMode === m ? 'bg-white text-[#191919] shadow-sm' : 'bg-transparent text-[#8A8A82]'}`}>
               {m === 'buy' ? '매매' : '전세'}
             </button>
@@ -254,8 +258,24 @@ export default function RecommendContent() {
                 {my?.priceMode ? '변경' : '검색·변경'}
               </button>
             </div>
-            {loading && !my ? (
+            {loading && !my && !noRentData ? (
               <div className="h-[52px] bg-[#F4F4F0] rounded-[12px] animate-pulse" />
+            ) : noRentData ? (
+              /* 전세 데이터 없음 */
+              <div className="flex items-start justify-between gap-[10px]">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[18px] font-extrabold text-[#191919] tracking-tight line-clamp-2 break-keep">
+                    {lastBaseRef.current?.name ?? '—'}
+                  </div>
+                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">
+                    {lastBaseRef.current ? `${lastBaseRef.current.gu} ${lastBaseRef.current.dong} · ${lastBaseRef.current.pyeong}평` : ''}
+                  </div>
+                </div>
+                <div className="text-right flex-none">
+                  <div className="text-[20px] font-extrabold text-[#ADADA4]">—</div>
+                  <span className="text-[10px] font-bold px-[6px] py-[2px] rounded-[5px] bg-[#F2F2EE] text-[#ADADA4] whitespace-nowrap mt-[4px] inline-block">전세 정보 없음</span>
+                </div>
+              </div>
             ) : my?.priceMode ? (
               /* 가격대 탐색 모드 카드 */
               <div className="flex items-center justify-between gap-[10px]">
@@ -377,9 +397,16 @@ export default function RecommendContent() {
           <span className="text-[#E8552D]">더 비쌈 ▸</span>
         </div>
 
+        {/* 전세 데이터 없음 안내 */}
+        {noRentData && (
+          <div className="mx-[16px] mb-[4px] bg-[#F8F8F6] rounded-[16px] p-[20px] text-center border border-[#EAEAE4]">
+            <div className="text-[13px] text-[#9A9A92]">최근 6개월간 전세 거래 내역이 없습니다</div>
+          </div>
+        )}
+
         {/* Cards */}
         <div className="flex flex-col gap-[10px] px-[16px] pb-[4px]">
-          {loading && items.length === 0 ? (
+          {noRentData ? null : loading && items.length === 0 ? (
             [0,1,2].map(i => <div key={i} className="h-[120px] bg-white rounded-[16px] animate-pulse" />)
           ) : items.map((r, idx) => {
             const diff = +(r.price - (my?.price ?? 0)).toFixed(1);
@@ -463,7 +490,7 @@ export default function RecommendContent() {
         </div>
 
         {/* More / fold */}
-        {total > 3 && (
+        {!noRentData && total > 3 && (
           <div className="px-[18px] pt-[14px] pb-[28px]">
             <button onClick={() => { if (allShown) setPage(0); else setPage(p => p + 1); }}
               className="w-full border border-[#E6E6E0] bg-white text-[#3A3A36] text-[14px] font-extrabold py-[14px] rounded-[15px] cursor-pointer">
