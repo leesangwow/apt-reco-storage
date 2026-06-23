@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useRef, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { SIDO_SHORT } from '@/lib/regions';
 
 const SIDO_ORDER = [
@@ -28,9 +28,10 @@ type Tab = 'name' | 'price';
 type NameStep = 'search' | 'pyeong';
 type DealMode = 'buy' | 'rent';
 
-export default function LandingPage() {
+function LandingContent() {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>('name');
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'price' ? 'price' : 'name');
   const [dealMode, setDealMode] = useState<DealMode>('buy');
 
   // 아파트명 검색
@@ -320,5 +321,13 @@ export default function LandingPage() {
         국토교통부 실거래가 기준 · 최근 6개월 평균
       </div>
     </div>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#F5F5F1]" />}>
+      <LandingContent />
+    </Suspense>
   );
 }

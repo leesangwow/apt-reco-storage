@@ -89,6 +89,7 @@ export default function RecommendContent() {
   const fetchRecommend = useCallback(async () => {
     if (!aptId && !priceMode) return;
     setLoading(true);
+    setData(null); // 탭 전환 시 이전 데이터 즉시 초기화
     try {
       const params = new URLSearchParams({
         ...(priceMode
@@ -104,6 +105,10 @@ export default function RecommendContent() {
       });
       const endpoint = dealMode === 'rent' ? '/api/rent' : '/api/recommend';
       const res = await fetch(`${endpoint}?${params}`);
+      if (!res.ok) {
+        console.error('API error:', res.status, await res.text());
+        return;
+      }
       const json = await res.json();
       setData(json);
     } catch (e) {
@@ -230,7 +235,7 @@ export default function RecommendContent() {
         {/* 매매/전세 스위치 */}
         <div className="flex bg-[#EAEAE4] rounded-[12px] p-[3px] mx-[18px] mb-[10px]">
           {(['buy', 'rent'] as const).map(m => (
-            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); }}
+            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); setData(null); }}
               className={`flex-1 text-[13px] font-bold py-[7px] rounded-[9px] transition-all cursor-pointer border-none ${dealMode === m ? 'bg-white text-[#191919] shadow-sm' : 'bg-transparent text-[#8A8A82]'}`}>
               {m === 'buy' ? '매매' : '전세'}
             </button>
@@ -244,7 +249,7 @@ export default function RecommendContent() {
               <span className="text-[11px] font-extrabold text-[#C99A00] bg-[#FFF6D6] px-[9px] py-[4px] rounded-[8px]">
                 {my?.priceMode ? '기준 — 가격대 탐색' : dealMode === 'rent' ? '기준 — 전세 시세' : '기준 — 내 관심 아파트'}
               </span>
-              <button onClick={() => my?.priceMode ? router.push('/') : (setSearchOpen(true), setQ(''), setSelectedComplex(null))}
+              <button onClick={() => my?.priceMode ? router.push('/?tab=price') : (setSearchOpen(true), setQ(''), setSelectedComplex(null))}
                 className="border-none bg-[#F2F2EE] text-[#3A3A36] text-[12px] font-bold px-[13px] py-[7px] rounded-[10px] cursor-pointer">
                 {my?.priceMode ? '변경' : '검색·변경'}
               </button>
