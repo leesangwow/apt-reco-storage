@@ -107,10 +107,11 @@ export async function GET(req: NextRequest) {
   const asc = dir === 'asc';
   const sorted = Array.from(complexMap.values()).sort((a, b) => {
     let v = 0;
-    if      (sort === 'diff') v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
-    else if (sort === 'area') v = Number(a.pyeong) - Number(b.pyeong);
-    else if (sort === 'year') v = (a.year_built ?? 0) - (b.year_built ?? 0);
-    else                      v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
+    if      (sort === 'diff')  v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
+    else if (sort === 'price') v = Number(a.avg_deposit) - Number(b.avg_deposit);
+    else if (sort === 'area')  v = Number(a.pyeong) - Number(b.pyeong);
+    else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
+    else                       v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
     return asc ? v : -v;
   });
 

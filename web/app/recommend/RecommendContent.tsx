@@ -160,7 +160,7 @@ export default function RecommendContent() {
   }, [q, searchOpen]);
 
   function handleSetSort(k: SortKey) {
-    const defaults: Record<SortKey, SortDir> = { diff: 'asc', dist: 'asc', area: 'desc', year: 'desc' };
+    const defaults: Record<SortKey, SortDir> = { diff: 'asc', dist: 'asc', area: 'desc', year: 'desc', price: 'asc' };
     if (sort === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSort(k); setSortDir(defaults[k]); }
     setPage(0);
@@ -216,6 +216,7 @@ export default function RecommendContent() {
     : [];
   const sortOptions: { key: SortKey; label: string }[] = [
     { key: 'diff', label: '가격차순' },
+    { key: 'price', label: '가격순' },
     { key: 'area', label: '평형순' },
     { key: 'year', label: '준공순' },
   ];
