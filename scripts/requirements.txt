@@ -1,0 +1,5 @@
+pandas
+psycopg2-binary
+python-dotenv
+tqdm
+playwright>=1.45.0
