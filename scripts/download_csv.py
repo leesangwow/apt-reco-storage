@@ -114,7 +114,7 @@ async def download_one(
 
     # ── 4. 시도 선택 ─────────────────────────────────────────────
     await page.select_option("select[name='srhSidoCd']", value=sido_code)
-    await page.wait_for_timeout(800)
+    await page.wait_for_timeout(1_000)
 
     if debug:
         print(f"     URL after sido select: {page.url}")
@@ -122,8 +122,37 @@ async def download_one(
 
     # ── 5. CSV 다운로드 ───────────────────────────────────────────
     save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if debug:
+        btns = await page.evaluate("""
+            () => Array.from(document.querySelectorAll('button, a[onclick], input[type=button]')).map(b => ({
+                tag: b.tagName, text: (b.innerText || b.value || '').trim(),
+                id: b.id, disabled: b.disabled,
+                visible: b.offsetParent !== null
+            })).filter(b => b.text)
+        """)
+        print(f"     클릭 가능 버튼 목록: {btns}")
+
     async with page.expect_download(timeout=60_000) as dl_info:
-        await page.click("button:has-text('CSV 다운')")
+        # force=True: 겹친 요소 무시하고 클릭
+        csv_btn = page.locator("button:has-text('CSV 다운')")
+        btn_count = await csv_btn.count()
+        if debug:
+            print(f"     'CSV 다운' 버튼 개수: {btn_count}")
+        if btn_count > 0:
+            await csv_btn.first.click(force=True)
+        else:
+            # 버튼 텍스트가 다를 경우 JS 클릭으로 대체
+            await page.evaluate("""
+                () => {
+                    const btn = Array.from(document.querySelectorAll('button, a[onclick]'))
+                        .find(b => (b.innerText || '').includes('CSV'));
+                    if (btn) btn.click();
+                    else throw new Error('CSV 버튼을 찾을 수 없음');
+                }
+            """)
+            if debug:
+                print("     JS fallback 클릭 사용")
 
     dl = await dl_info.value
     suggested = dl.suggested_filename
