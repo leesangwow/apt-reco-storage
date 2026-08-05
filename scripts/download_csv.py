@@ -8,7 +8,7 @@
 
   python scripts/download_csv.py --diagnose         # 페이지 폼 구조 확인 (셀렉터 파악용)
   python scripts/download_csv.py --type buy         # 매매 CSV
-  python scripts/download_csv.py --type rent        # 전세 CSV
+  python scripts/download_csv.py --type rent        # 전월세 CSV
   python scripts/download_csv.py --type all         # 전체 (기본값)
   python scripts/download_csv.py --type buy --debug # 각 단계 스크린샷 저장
   python scripts/download_csv.py --type buy --show  # 브라우저 화면 표시 (셀렉터 확인용)
@@ -17,7 +17,7 @@
 import argparse
 import asyncio
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -27,14 +27,22 @@ except ImportError:
     print("  pip install playwright && playwright install chromium")
     sys.exit(1)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_log import RunLogger  # noqa: E402
+
 
 # ─── 설정 ──────────────────────────────────────────────────────────────────
 XLS_URL = "https://rt.molit.go.kr/pt/xls/xls.do?mobileAt="
 
-# 수집 기간: 당해연도 1월 1일 ~ 오늘 (HTML date input 형식: YYYY-MM-DD)
-YEAR       = datetime.now().year
-START_DATE = f"{YEAR}-01-01"
-END_DATE   = datetime.now().strftime("%Y-%m-%d")
+# 수집 기간: 오늘로부터 1년 전 ~ 오늘 (HTML date input 형식: YYYY-MM-DD)
+#
+# 연초에 "당해 1월 1일부터"로 잡으면, 계약 후 30일 이내 신고 규정 때문에
+# 전년 12월 계약분이 1월에 신고될 때 어떤 실행의 수집 범위에도 안 들어와 영구 누락된다.
+# 롤링 1년 창으로 잡으면 지연 신고분이 다음 주 실행에서 다시 걸린다.
+# (사이트 제한: 시도별 조회는 최대 366일)
+_TODAY     = datetime.now()
+START_DATE = (_TODAY - timedelta(days=365)).strftime("%Y-%m-%d")
+END_DATE   = _TODAY.strftime("%Y-%m-%d")
 
 # 저장 경로
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -52,12 +60,25 @@ BUY_REGIONS = [
 RENT_REGIONS = BUY_REGIONS[:]  # 전세도 같은 지역 수집 (필요시 수정)
 
 # ─── 거래유형 설정 ─────────────────────────────────────────────────────────
-# srhDelngSecd hidden input으로 거래유형 지정
-# 값은 사이트 동작 확인 후 조정 (빈 문자열 = 사이트 기본값)
+# 페이지의 fnRtToLr(val) 에 넘기는 값 (srhDelngSecd hidden input 값)
 DEAL_TYPE_VALUE = {
-    "buy":  "",   # 매매: 사이트 기본값 사용 (xlsTab1 = 아파트 기본 로드 시 매매)
-    "rent": "B",  # 전세: 값 확인 필요 시 --diagnose 후 업데이트
+    "buy":  "1",  # 매매
+    "rent": "2",  # 전월세
 }
+
+# 물건구분: fnThingChange(val) — A=아파트
+THING_APARTMENT = "A"
+
+DEAL_LABEL = {"buy": "매매", "rent": "전월세"}
+
+# ─── 타임아웃 / 재시도 ──────────────────────────────────────────────────────
+# 1년치 시도 단위 조회는 서버에서 파일을 만드는 데만 수 분이 걸릴 수 있고,
+# 큰 조회 직후에는 후속 요청까지 함께 느려진다. 넉넉히 잡고 실패 시 재시도한다.
+GOTO_TIMEOUT_MS     = 90_000
+DOWNLOAD_TIMEOUT_MS = 300_000
+MAX_ATTEMPTS        = 3
+RETRY_BACKOFF_SEC   = 30   # 재시도 전 대기 (서버 회복 시간)
+BETWEEN_REGIONS_SEC = 5    # 지역 간 간격
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -71,68 +92,71 @@ async def download_one(
     region_key: str,
     sido_code: str,
     save_path: Path,
+    alerts: list,
     debug: bool = False,
 ):
     """한 지역·한 거래유형의 CSV 다운로드"""
-    label = "매매" if deal_type == "buy" else "전세"
+    label = DEAL_LABEL[deal_type]
     print(f"  [{label}] {region_key} (시도코드={sido_code}) 다운로드 중...")
 
     # ── 1. 페이지 로드 ─────────────────────────────────────────────
-    await page.goto(XLS_URL, wait_until="domcontentloaded", timeout=30_000)
+    # 큰 조회 직후에는 서버가 느려져 페이지 로드부터 오래 걸린다.
+    await page.goto(XLS_URL, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
     await page.wait_for_timeout(1_500)
+    alerts.clear()
 
     if debug:
-        print(f"     URL: {page.url}")
         await page.screenshot(path=screenshot_path("01_loaded", region_key))
 
-    # ── 1-b. 아파트 탭 활성화 (ID 셀렉터로 폼 탭 정확히 클릭) ────
-    await page.click("a#xlsTab1")
-    await page.wait_for_timeout(800)
+    # ── 2. 물건구분(아파트) · 거래유형(매매/전월세) 전환 ──────────
+    # hidden input을 직접 쓰면 사이트가 폼을 재구성하지 않아 다운로드가 실패한다.
+    # 반드시 페이지 함수를 호출해 fnSetSearch()까지 태워야 한다.
+    await page.evaluate(f"fnThingChange('{THING_APARTMENT}')")
+    await page.wait_for_timeout(1_000)
+    await page.evaluate(f"fnRtToLr('{DEAL_TYPE_VALUE[deal_type]}')")
+    await page.wait_for_timeout(1_000)
 
     if debug:
-        await page.screenshot(path=screenshot_path("01b_tab", region_key))
-
-    # ── 2. 거래유형 hidden 필드 설정 ─────────────────────────────
-    deal_val = DEAL_TYPE_VALUE.get(deal_type, "")
-    await page.evaluate(
-        f"() => {{ "
-        f"  var el = document.getElementById('srhDelngSecd'); "
-        f"  if (el) el.value = '{deal_val}'; "
-        f"}}"
-    )
-
-    if debug:
-        print(f"     URL after deal type set: {page.url}")
         await page.screenshot(path=screenshot_path("02_deal", region_key))
 
     # ── 3. 시작일 / 종료일 설정 (type=date, 형식: YYYY-MM-DD) ─────
-    await page.fill("input[name='srhFromDt']", START_DATE)
-    await page.fill("input[name='srhToDt']",   END_DATE)
+    await page.fill("#srhFromDt", START_DATE)
+    await page.fill("#srhToDt",   END_DATE)
 
     if debug:
         await page.screenshot(path=screenshot_path("03_date", region_key))
 
-    # ── 4. 시도 선택 ─────────────────────────────────────────────
-    await page.select_option("select[name='srhSidoCd']", value=sido_code)
-    await page.wait_for_timeout(800)
+    # ── 4. 시도 선택 (읍면동/단지 목록 ajax 재조회 대기) ──────────
+    await page.select_option("#srhSidoCd", value=sido_code)
+    await page.wait_for_timeout(1_500)
 
     if debug:
-        print(f"     URL after sido select: {page.url}")
+        serialized = await page.evaluate("() => $('#frm_xls').serialize()")
+        print(f"     form: {serialized}")
         await page.screenshot(path=screenshot_path("04_sido", region_key))
 
     # ── 5. CSV 다운로드 ───────────────────────────────────────────
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    async with page.expect_download(timeout=60_000) as dl_info:
-        await page.click("button:has-text('CSV 다운')")
+    try:
+        async with page.expect_download(timeout=DOWNLOAD_TIMEOUT_MS) as dl_info:
+            await page.click("button:has-text('CSV 다운')")
+        dl = await dl_info.value
+    except PWTimeout:
+        # 사이트는 실패 원인을 alert()으로만 알려준다.
+        hint = " / ".join(alerts) if alerts else "alert 없음 (네트워크 지연 가능)"
+        raise RuntimeError(f"CSV 다운로드 응답 없음 — {hint}") from None
 
-    dl = await dl_info.value
     suggested = dl.suggested_filename
     await dl.save_as(save_path)
+
+    size = save_path.stat().st_size
+    if size == 0:
+        raise RuntimeError(f"다운로드 파일이 비어 있음: {save_path.name}")
 
     if debug:
         await page.screenshot(path=screenshot_path("05_done", region_key))
 
-    print(f"  ✓ 저장: {save_path.name}  (원본: {suggested})")
+    print(f"  ✓ 저장: {save_path.name}  ({size:,} bytes, 원본: {suggested})")
 
 
 async def diagnose(headless: bool = False):
@@ -195,35 +219,75 @@ async def diagnose(headless: bool = False):
 
 
 async def run(deal_types: list, headless: bool, debug: bool):
+    run_log = RunLogger()
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
             headless=headless,
+            # 화면 표시 모드에서는 각 동작을 눈으로 확인할 수 있게 천천히 실행
+            slow_mo=0 if headless else 500,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         context = await browser.new_context(accept_downloads=True)
         page = await context.new_page()
         page.set_default_timeout(20_000)
 
+        # 사이트는 검증/다운로드 실패를 alert()으로만 알린다. 메시지를 모아 오류에 첨부한다.
+        alerts: list = []
+
+        async def on_dialog(dialog):
+            alerts.append(dialog.message.replace("\n", " "))
+            await dialog.dismiss()
+
+        page.on("dialog", lambda d: asyncio.ensure_future(on_dialog(d)))
+
         failed = []
         for deal_type in deal_types:
             regions  = BUY_REGIONS  if deal_type == "buy"  else RENT_REGIONS
             save_dir = BUY_DIR      if deal_type == "buy"  else RENT_DIR
-            label    = "매매"       if deal_type == "buy"  else "전세"
+            label    = DEAL_LABEL[deal_type]
 
             print(f"\n[{label}] {len(regions)}개 지역 수집 시작 ({START_DATE} ~ {END_DATE})")
             for region_key, sido_code in regions:
-                save_path = save_dir / f"{region_key}_{YEAR}.csv"
+                # 롤링 1년 창이라 연도를 파일명에 넣지 않는다.
+                # (연도를 넣으면 해가 바뀔 때 옛 파일이 남아 매 실행마다 불필요하게 재적재된다)
+                save_path = save_dir / f"{region_key}.csv"
+
+                # 국토부 서버는 조회량이 많으면 응답이 크게 느려진다.
+                # 일시적 지연으로 한 지역이 통째로 빠지지 않도록 재시도한다.
                 try:
-                    await download_one(page, deal_type, region_key, sido_code, save_path, debug)
-                    await asyncio.sleep(2)
+                    with run_log.track("download", deal_type, region_key) as entry:
+                        entry.from_date = START_DATE
+                        entry.to_date   = END_DATE
+
+                        for attempt in range(1, MAX_ATTEMPTS + 1):
+                            entry.attempts = attempt
+                            try:
+                                await download_one(
+                                    page, deal_type, region_key, sido_code,
+                                    save_path, alerts, debug,
+                                )
+                                entry.file_bytes = save_path.stat().st_size
+                                await asyncio.sleep(BETWEEN_REGIONS_SEC)
+                                break
+                            except Exception as exc:
+                                last_error = str(exc).splitlines()[0]
+                                if attempt >= MAX_ATTEMPTS:
+                                    raise
+                                print(
+                                    f"  ! {region_key} {attempt}차 실패: {last_error}"
+                                    f" — {RETRY_BACKOFF_SEC}초 후 재시도"
+                                )
+                                await asyncio.sleep(RETRY_BACKOFF_SEC)
                 except Exception as exc:
-                    print(f"  ✗ {region_key} 실패: {exc}")
+                    last_error = str(exc).splitlines()[0]
+                    print(f"  ✗ {region_key} 실패 ({MAX_ATTEMPTS}회 시도): {last_error}")
                     if debug:
                         try:
                             await page.screenshot(path=screenshot_path("error", region_key))
                         except Exception:
                             pass
-                    failed.append((deal_type, region_key, str(exc)))
+                    failed.append((deal_type, region_key, last_error))
 
         await browser.close()
 

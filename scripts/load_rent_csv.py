@@ -8,12 +8,16 @@
 import argparse
 import glob
 import os
+import sys
 
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from run_log import RunLogger  # noqa: E402
 
 load_dotenv()
 
@@ -127,19 +131,24 @@ select id from apts where name=%s and gu=%s and dong=%s and area_sqm=%s;
 """
 
 
-def insert_rent_transactions(cur, rows: list[tuple]):
-    psycopg2.extras.execute_values(
+def insert_rent_transactions(cur, rows: list[tuple]) -> int:
+    """대량 insert (중복은 unique constraint로 자동 스킵). 실제 삽입된 행수를 반환."""
+    inserted = psycopg2.extras.execute_values(
         cur,
         """insert into rent_transactions
              (apt_id, contract_date, deposit_man, monthly_man, deal_type, contract_type, floor, contract_period)
            values %s
-           on conflict (apt_id, contract_date, deposit_man, monthly_man, floor, deal_type) do nothing""",
+           on conflict (apt_id, contract_date, deposit_man, monthly_man, floor, deal_type) do nothing
+           returning id""",
         rows,
         page_size=500,
+        fetch=True,
     )
+    return len(inserted)
 
 
-def load_to_db(df: pd.DataFrame, conn):
+def load_to_db(df: pd.DataFrame, conn) -> int:
+    """적재 후 새로 삽입된 거래 행수를 반환한다."""
     cur = conn.cursor()
 
     # 1단계: 고유 단지 목록 추출 후 일괄 upsert
@@ -186,6 +195,7 @@ def load_to_db(df: pd.DataFrame, conn):
 
     # 3단계: 거래 일괄 insert
     print("  거래 insert 중...", flush=True)
+    inserted = 0
     tx_rows = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
         key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
@@ -203,15 +213,16 @@ def load_to_db(df: pd.DataFrame, conn):
             row["contract_period"] if pd.notna(row.get("contract_period", pd.NA)) else None,
         ))
         if len(tx_rows) >= 1000:
-            insert_rent_transactions(cur, tx_rows)
+            inserted += insert_rent_transactions(cur, tx_rows)
             tx_rows.clear()
             conn.commit()
 
     if tx_rows:
-        insert_rent_transactions(cur, tx_rows)
+        inserted += insert_rent_transactions(cur, tx_rows)
         conn.commit()
 
     cur.close()
+    return inserted
 
 
 # ── 메인 ────────────────────────────────────────────────────
@@ -236,22 +247,31 @@ def main():
 
     print(f"CSV 파일 {len(csv_files)}개 발견")
     conn = psycopg2.connect(**DB_PARAMS)
+    run_log = RunLogger()
 
     total = 0
+    failed = 0
     for path in csv_files:
+        region_key = os.path.splitext(os.path.basename(path))[0]
         print(f"\n▶ {os.path.basename(path)}")
         try:
-            df = load_csv(path)
-            df = preprocess(df)
-            print(f"  유효 행: {len(df):,}")
-            load_to_db(df, conn)
-            total += len(df)
+            with run_log.track("load", "rent", region_key) as entry:
+                df = load_csv(path)
+                df = preprocess(df)
+                entry.rows_total = len(df)
+                print(f"  유효 행: {len(df):,}")
+                entry.rows_new = load_to_db(df, conn)
+                print(f"  신규 적재: {entry.rows_new:,}건")
+                total += len(df)
         except Exception as e:
             print(f"  [오류] {e}")
             conn.rollback()
+            failed += 1
 
     conn.close()
-    print(f"\n[완료] 총 {total:,}건 적재")
+    print(f"\n[완료] 총 {total:,}건 처리, 실패 {failed}건")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

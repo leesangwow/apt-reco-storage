@@ -21,3 +21,12 @@ Thumbs.db
 
 # 처리 완료된 CSV (로컬 보관용, 저장소 불필요)
 data/processed/**/*.csv
+
+# download_csv.py 디버그 산출물
+debug_*.png
+diagnose.png
+xls_page.html
+
+
+# Claude Code 로컬 설정 (머신별 경로 포함)
+.claude/settings.local.json

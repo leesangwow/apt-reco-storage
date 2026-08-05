@@ -2,8 +2,11 @@ name: 실거래가 CSV 자동 수집
 
 on:
   schedule:
-    # 매주 월요일 오전 10시(KST = UTC+9) 실행
-    - cron: '0 1 * * 1'
+    # 매주 월·목요일 오전 10시(KST = UTC+9) 실행
+    # 주 2회인 이유: Supabase 무료 플랜은 미사용이 이어지면 프로젝트를 자동 일시정지한다.
+    # 주 1회(7일 간격)면 정지 임계에 계속 걸쳐 적재 단계가 접속 실패로 죽는다.
+    # 월→목(3일), 목→월(4일) 간격이면 DB가 깨어 있는 상태로 유지된다.
+    - cron: '0 1 * * 1,4'
   # Actions 탭에서 수동 실행 가능
   workflow_dispatch:
     inputs:
@@ -14,11 +17,26 @@ on:
         type: choice
         options: [all, buy, rent]
 
+# 수집이 늦어져 다음 주 실행과 겹치면 DB에 동시 적재가 일어난다. 앞선 실행을 끝까지 기다린다.
+concurrency:
+  group: auto-collect
+  cancel-in-progress: false
+
 jobs:
   collect-and-load:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write   # CSV git push 권한
+
+    env:
+      COLLECT_TYPE: ${{ github.event.inputs.type || 'all' }}
+      # 다운로드·적재 모두 ingestion_runs에 실행 이력을 남긴다 (관리자 페이지용).
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -34,46 +52,58 @@ jobs:
       - name: 의존성 설치
         run: pip install -r scripts/requirements.txt
 
+      # Chromium 바이너리(~150MB)는 매 실행 재다운로드할 이유가 없다.
+      - name: Playwright 브라우저 캐시
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scripts/requirements.txt') }}
+
       - name: Playwright Chromium 설치
-        run: playwright install chromium --with-deps
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            playwright install-deps chromium   # 시스템 라이브러리만 (바이너리는 캐시 사용)
+          else
+            playwright install chromium --with-deps
+          fi
 
       # ── 1단계: 웹사이트에서 CSV 다운로드 ───────────────────────────
+      # --debug: 실패 시 원인 파악용 단계별 스크린샷 (아래 artifact로 업로드)
       - name: CSV 다운로드
-        run: |
-          TYPE="${{ github.event.inputs.type || 'all' }}"
-          python scripts/download_csv.py --type "$TYPE"
+        run: python scripts/download_csv.py --type "$COLLECT_TYPE" --debug
+
+      - name: 실패 시 스크린샷 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-debug-screenshots
+          path: debug_*.png
+          retention-days: 7
+          if-no-files-found: ignore
 
       # ── 2단계: Supabase 적재 ────────────────────────────────────────
       - name: Supabase 적재 (매매)
-        if: ${{ github.event.inputs.type != 'rent' }}
-        env:
-          SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        if: env.COLLECT_TYPE != 'rent'
         run: python scripts/load_csv.py --dir ./data/updates/buy
 
-      - name: Supabase 적재 (전세)
-        if: ${{ github.event.inputs.type != 'buy' }}
-        env:
-          SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      - name: Supabase 적재 (전월세)
+        if: env.COLLECT_TYPE != 'buy'
         run: python scripts/load_rent_csv.py --dir ./data/updates/rent
 
       # ── 3단계: CSV 파일을 git에 커밋 (기록 보관) ────────────────────
+      # [skip actions] 없이도 GITHUB_TOKEN 푸시는 다른 워크플로를 트리거하지 않는다.
+      # (load-transactions.yml 중복 실행 없음)
       - name: CSV git 커밋 & 푸시
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/updates/
           if git diff --staged --quiet; then
-            echo "새로운 CSV 없음 — 커밋 생략"
+            echo "변경된 CSV 없음 — 커밋 생략"
           else
-            MONTH=$(date +'%Y-%m')
-            git commit -m "data: 실거래가 CSV 자동 수집 ${MONTH}"
-            git push
+            git commit -m "data: 실거래가 CSV 자동 수집 $(date +'%Y-%m-%d')"
+            # 실행 중 다른 커밋이 올라왔을 수 있으므로 rebase 후 푸시
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
