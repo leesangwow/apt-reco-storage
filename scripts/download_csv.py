@@ -12,6 +12,10 @@
   python scripts/download_csv.py --type all         # 전체 (기본값)
   python scripts/download_csv.py --type buy --debug # 각 단계 스크린샷 저장
   python scripts/download_csv.py --type buy --show  # 브라우저 화면 표시 (셀렉터 확인용)
+
+  # 실패한 지역만 재실행
+  python scripts/download_csv.py --list-regions
+  python scripts/download_csv.py --region gyeonggi,seoul
 """
 
 import argparse
@@ -235,7 +239,7 @@ async def diagnose(headless: bool = False):
         print("\n확인 후 SELECTORS 딕셔너리를 업데이트하세요.")
 
 
-async def run(deal_types: list, headless: bool, debug: bool):
+async def run(deal_types: list, headless: bool, debug: bool, only: set | None = None):
     run_log = RunLogger()
 
     async with async_playwright() as pw:
@@ -263,6 +267,9 @@ async def run(deal_types: list, headless: bool, debug: bool):
             regions  = BUY_REGIONS  if deal_type == "buy"  else RENT_REGIONS
             save_dir = BUY_DIR      if deal_type == "buy"  else RENT_DIR
             label    = DEAL_LABEL[deal_type]
+
+            if only:
+                regions = [r for r in regions if r[0] in only]
 
             print(f"\n[{label}] {len(regions)}개 지역 수집 시작 ({START_DATE} ~ {END_DATE})")
             for region_key, sido_code in regions:
@@ -335,7 +342,21 @@ def main():
         "--show", action="store_true",
         help="브라우저 화면 표시 (헤드리스 OFF, 셀렉터 확인용)",
     )
+    parser.add_argument(
+        "--region", default="",
+        help="특정 지역만 수집 (쉼표 구분). 실패한 지역만 재실행할 때 쓴다. "
+             "예: --region gyeonggi,seoul",
+    )
+    parser.add_argument(
+        "--list-regions", action="store_true",
+        help="수집 대상 지역 키 목록 출력",
+    )
     args = parser.parse_args()
+
+    if args.list_regions:
+        for key, code in BUY_REGIONS:
+            print(f"{key:16} {code}")
+        return
 
     headless = not args.show
 
@@ -343,8 +364,20 @@ def main():
         asyncio.run(diagnose(headless=False))
         return
 
+    only = None
+    if args.region:
+        only = {r.strip() for r in args.region.split(",") if r.strip()}
+        known = {key for key, _ in BUY_REGIONS}
+        unknown = only - known
+        if unknown:
+            # 오타로 아무것도 수집하지 않고 조용히 성공하는 일이 없게 한다.
+            print(f"알 수 없는 지역 키: {', '.join(sorted(unknown))}")
+            print(f"사용 가능: {', '.join(sorted(known))}")
+            sys.exit(2)
+        print(f"지역 한정 수집: {', '.join(sorted(only))}")
+
     deal_types = ["buy", "rent"] if args.type == "all" else [args.type]
-    asyncio.run(run(deal_types, headless, args.debug))
+    asyncio.run(run(deal_types, headless, args.debug, only))
 
 
 if __name__ == "__main__":

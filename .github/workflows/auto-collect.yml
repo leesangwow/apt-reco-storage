@@ -2,11 +2,14 @@ name: 실거래가 CSV 자동 수집
 
 on:
   schedule:
-    # 매주 월·목요일 오전 10시(KST = UTC+9) 실행
-    # 주 2회인 이유: Supabase 무료 플랜은 미사용이 이어지면 프로젝트를 자동 일시정지한다.
-    # 주 1회(7일 간격)면 정지 임계에 계속 걸쳐 적재 단계가 접속 실패로 죽는다.
-    # 월→목(3일), 목→월(4일) 간격이면 DB가 깨어 있는 상태로 유지된다.
-    - cron: '0 1 * * 1,4'
+    # [운용 테스트 · 2026-08-06 ~ 08-13] 매일 새벽 2시(KST) 실행.
+    # cron은 UTC 기준이라 02:00 KST = 17:00 UTC 전날.
+    #
+    # 테스트가 끝나면 아래 주 2회(월·목 오전 10시)로 되돌릴 것:
+    #   - cron: '0 1 * * 1,4'
+    # 주 2회로 두는 이유는 Supabase 무료 플랜의 자동 일시정지 때문이다.
+    # 주 1회(7일 간격)면 정지 임계에 걸쳐 적재가 접속 실패로 죽는다.
+    - cron: '0 17 * * *'
   # Actions 탭에서 수동 실행 가능
   workflow_dispatch:
     inputs:
@@ -16,6 +19,11 @@ on:
         default: 'all'
         type: choice
         options: [all, buy, rent]
+      regions:
+        description: '특정 지역만 (쉼표 구분, 비우면 전체). 예: gyeonggi,seoul'
+        required: false
+        default: ''
+        type: string
 
 # 수집이 늦어져 다음 주 실행과 겹치면 DB에 동시 적재가 일어난다. 앞선 실행을 끝까지 기다린다.
 concurrency:
@@ -31,7 +39,8 @@ jobs:
       contents: read
 
     env:
-      COLLECT_TYPE: ${{ github.event.inputs.type || 'all' }}
+      COLLECT_TYPE:    ${{ github.event.inputs.type || 'all' }}
+      COLLECT_REGIONS: ${{ github.event.inputs.regions || '' }}
       # 다운로드·적재 모두 ingestion_runs에 실행 이력을 남긴다 (관리자 페이지용).
       SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
       SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
@@ -71,8 +80,14 @@ jobs:
 
       # ── 1단계: 웹사이트에서 CSV 다운로드 ───────────────────────────
       # --debug: 실패 시 원인 파악용 단계별 스크린샷 (아래 artifact로 업로드)
+      # regions 입력이 있으면 그 지역만 — 실패한 지역만 골라 재실행할 때 쓴다.
       - name: CSV 다운로드
-        run: python scripts/download_csv.py --type "$COLLECT_TYPE" --debug
+        run: |
+          if [ -n "$COLLECT_REGIONS" ]; then
+            python scripts/download_csv.py --type "$COLLECT_TYPE" --region "$COLLECT_REGIONS" --debug
+          else
+            python scripts/download_csv.py --type "$COLLECT_TYPE" --debug
+          fi
 
       - name: 실패 시 스크린샷 업로드
         if: failure()
