@@ -113,10 +113,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ── 3단계: Supabase 적재 (성공한 CSV는 적재 후 삭제된다) ────────
+      # 두 단계는 서로 독립이다. 조건을 그냥 두면 GitHub이 success()를 암묵적으로
+      # 붙여서, 매매가 실패하면 전월세가 통째로 건너뛰어진다. 매매 일부가 실패해도
+      # 전월세는 적재되어야 하고, 다운로드가 일부만 성공했어도 받은 것은 넣어야 한다.
+      # (always() 대신 !cancelled() — 사용자가 취소한 경우까지 강행하지는 않는다)
       - name: Supabase 적재 (매매)
-        if: env.COLLECT_TYPE != 'rent'
+        if: ${{ !cancelled() && env.COLLECT_TYPE != 'rent' }}
         run: python scripts/load_csv.py --dir ./data/updates/buy
 
       - name: Supabase 적재 (전월세)
-        if: env.COLLECT_TYPE != 'buy'
+        if: ${{ !cancelled() && env.COLLECT_TYPE != 'buy' }}
         run: python scripts/load_rent_csv.py --dir ./data/updates/rent

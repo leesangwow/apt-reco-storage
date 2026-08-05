@@ -12,6 +12,7 @@ import argparse
 import glob
 import os
 import sys
+import time
 
 import pandas as pd
 import psycopg2
@@ -22,7 +23,7 @@ from tqdm import tqdm
 sys.stdout.reconfigure(line_buffering=True)  # CI 로그에 진행 상황이 바로 찍히도록
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from run_log import RunLogger  # noqa: E402
+from run_log import Entry, RunLogger  # noqa: E402
 
 load_dotenv()
 
@@ -242,6 +243,29 @@ def discard(path: str) -> None:
         print(f"  [경고] CSV 삭제 실패 (무시): {e}")
 
 
+# 일시적 DB 장애(Supabase 재시작, 커넥션 끊김)로 지역 하나가 다음 스케줄까지
+# 통째로 빠지지 않도록 재시도한다. 파싱 오류처럼 다시 해도 같은 결과인 것은
+# 재시도하지 않는다 — 시간만 쓰고 결과가 같다.
+LOAD_MAX_ATTEMPTS = 3
+LOAD_BACKOFF_SEC  = 20
+TRANSIENT = (psycopg2.OperationalError, psycopg2.InterfaceError)
+
+
+def ensure_conn(conn):
+    """끊긴 커넥션이면 새로 연결해 돌려준다."""
+    if conn is not None and not conn.closed:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("select 1")
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return psycopg2.connect(**DB_PARAMS)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="./data/updates/rent")
@@ -265,7 +289,7 @@ def main():
         return
 
     print(f"CSV 파일 {len(csv_files)}개 발견")
-    conn = psycopg2.connect(**DB_PARAMS)
+    conn = None
     run_log = RunLogger()
 
     total = 0
@@ -273,8 +297,13 @@ def main():
     for path in csv_files:
         region_key = os.path.splitext(os.path.basename(path))[0]
         print(f"\n▶ {os.path.basename(path)}")
-        try:
-            with run_log.track("load", "rent", region_key) as entry:
+
+        entry = Entry()
+        ok = False
+        for attempt in range(1, LOAD_MAX_ATTEMPTS + 1):
+            entry.attempts = attempt
+            try:
+                conn = ensure_conn(conn)
                 df = load_csv(path)
                 df = preprocess(df)
                 entry.rows_total = len(df)
@@ -282,9 +311,27 @@ def main():
                 entry.rows_new = load_to_db(df, conn)
                 print(f"  신규 적재: {entry.rows_new:,}건")
                 total += len(df)
-        except Exception as e:
-            print(f"  [오류] {e}")
-            conn.rollback()
+                ok = True
+                break
+            except Exception as e:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+
+                if isinstance(e, TRANSIENT) and attempt < LOAD_MAX_ATTEMPTS:
+                    print(f"  ! {attempt}차 실패: {e} — {LOAD_BACKOFF_SEC}초 후 재시도")
+                    time.sleep(LOAD_BACKOFF_SEC)
+                    continue
+
+                print(f"  [오류] {e}")
+                entry.error = str(e).splitlines()[0][:1000]
+                break
+
+        run_log.write("load", "rent", region_key, "success" if ok else "failed", entry)
+
+        if not ok:
             failed += 1
             continue
 
@@ -292,7 +339,8 @@ def main():
         if not args.keep_csv:
             discard(path)
 
-    conn.close()
+    if conn is not None and not conn.closed:
+        conn.close()
     print(f"\n[완료] 총 {total:,}건 처리, 실패 {failed}건")
     if failed:
         sys.exit(1)
