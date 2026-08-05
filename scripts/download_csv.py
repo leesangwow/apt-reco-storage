@@ -12,8 +12,6 @@
   python scripts/download_csv.py --type all         # 전체 (기본값)
   python scripts/download_csv.py --type buy --debug # 각 단계 스크린샷 저장
   python scripts/download_csv.py --type buy --show  # 브라우저 화면 표시 (셀렉터 확인용)
-
-셀렉터 조정이 필요하면 아래 SELECTORS 딕셔너리를 수정하세요.
 """
 
 import argparse
@@ -33,114 +31,38 @@ except ImportError:
 # ─── 설정 ──────────────────────────────────────────────────────────────────
 XLS_URL = "https://rt.molit.go.kr/pt/xls/xls.do?mobileAt="
 
-# 수집 기간: 당해연도 1월 1일 ~ 오늘
+# 수집 기간: 당해연도 1월 1일 ~ 오늘 (HTML date input 형식: YYYY-MM-DD)
 YEAR       = datetime.now().year
-START_DATE = f"{YEAR}0101"
-END_DATE   = datetime.now().strftime("%Y%m%d")
+START_DATE = f"{YEAR}-01-01"
+END_DATE   = datetime.now().strftime("%Y-%m-%d")
 
 # 저장 경로
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUY_DIR   = REPO_ROOT / "data" / "updates" / "buy"
 RENT_DIR  = REPO_ROOT / "data" / "updates" / "rent"
 
-# 수집 지역: (저장파일명, 시도코드)
-# 시도코드: 서울11 부산26 대구27 인천28 광주29 대전30 울산31 세종36
-#           경기41 강원42 충북43 충남44 전북45 전남46 경북47 경남48 제주50
+# 수집 지역: (저장파일명, srhSidoCd 값)
+# --diagnose 에서 확인된 5자리 코드 사용
 BUY_REGIONS = [
-    ("choongbuk",     "43"),  # 충청북도
-    ("jeonbuktuk",    "45"),  # 전북특별자치도
-    ("jeonranam",     "46"),  # 전라남도
-    ("kyeongsangbuk", "47"),  # 경상북도
+    ("choongbuk",     "43000"),  # 충청북도
+    ("jeonbuktuk",    "52000"),  # 전북특별자치도
+    ("jeonranam",     "12000"),  # 전남광주통합특별시 (구 전라남도)
+    ("kyeongsangbuk", "47000"),  # 경상북도
 ]
 RENT_REGIONS = BUY_REGIONS[:]  # 전세도 같은 지역 수집 (필요시 수정)
 
-# ─── 셀렉터 ── --diagnose 결과 확인 후 이 값을 업데이트하세요 ────────────────
-SELECTORS = {
-    # 거래유형 select (--diagnose 로 name/id 확인 후 업데이트)
-    # 매매 value, 전세 value도 option 목록에서 확인 필요
-    "deal_type_select": (
-        "select[name='srhThingSecd'],"
-        "select[name='dealType'],"
-        "select[name='thingSecd'],"
-        "select[name='srhDealType']"
-    ),
-    "deal_type_buy":  "A",   # 매매 option value (--diagnose 후 확인)
-    "deal_type_rent": "B",   # 전세 option value (--diagnose 후 확인)
-
-    # 기간 입력 (YYYYMMDD 형식)
-    "start_date": (
-        "input[name='startDt'],"
-        "input[id='startDt'],"
-        "input[name='srchStartDt'],"
-        "input[placeholder*='시작']"
-    ),
-    "end_date": (
-        "input[name='endDt'],"
-        "input[id='endDt'],"
-        "input[name='srchEndDt'],"
-        "input[placeholder*='종료']"
-    ),
-
-    # 시도 선택 드롭다운
-    "sido": (
-        "select[name='srhSidoCd'],"
-        "select[name='sidoCd'],"
-        "select[name='sido'],"
-        "select[name='srhArea1']"
-    ),
-
-    # 조회 버튼
-    "search": (
-        "button:has-text('조회'),"
-        "input[type='submit'][value*='조회'],"
-        "a:has-text('조회')"
-    ),
-
-    # 다운로드 버튼 (CSV 우선, 없으면 Excel)
-    "download_csv":   "button:has-text('CSV'), a:has-text('CSV')",
-    "download_excel": "button:has-text('다운로드'), a:has-text('다운로드'), button:has-text('엑셀'), a:has-text('엑셀')",
+# ─── 거래유형 설정 ─────────────────────────────────────────────────────────
+# srhDelngSecd hidden input으로 거래유형 지정
+# 값은 사이트 동작 확인 후 조정 (빈 문자열 = 사이트 기본값)
+DEAL_TYPE_VALUE = {
+    "buy":  "",   # 매매: 사이트 기본값 사용 (xlsTab1 = 아파트 기본 로드 시 매매)
+    "rent": "B",  # 전세: 값 확인 필요 시 --diagnose 후 업데이트
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def screenshot_path(step: str, region_key: str) -> str:
     return f"debug_{step}_{region_key}.png"
-
-
-async def fill_date(page, selector_str: str, value: str):
-    """날짜 input 채우기 - 여러 셀렉터를 순서대로 시도"""
-    loc = page.locator(selector_str).first
-    try:
-        await loc.wait_for(timeout=5_000)
-        await loc.triple_click()
-        await loc.fill(value)
-        await loc.press("Tab")
-    except PWTimeout:
-        raise RuntimeError(f"날짜 input을 찾지 못했습니다. 셀렉터 확인: {selector_str}")
-
-
-async def select_sido(page, selector_str: str, sido_code: str):
-    """시도 드롭다운 선택"""
-    loc = page.locator(selector_str).first
-    try:
-        await loc.wait_for(timeout=5_000)
-        await loc.select_option(value=sido_code)
-        await page.wait_for_timeout(800)
-    except PWTimeout:
-        raise RuntimeError(f"시도 드롭다운을 찾지 못했습니다. 셀렉터 확인: {selector_str}")
-
-
-async def click_first(page, selector_str: str, timeout: int = 8_000, required: bool = True):
-    """여러 셀렉터 중 처음 발견된 요소 클릭"""
-    for sel in [s.strip() for s in selector_str.split(",")]:
-        try:
-            await page.click(sel, timeout=timeout)
-            return True
-        except PWTimeout:
-            continue
-    if required:
-        raise RuntimeError(f"클릭 대상을 찾지 못했습니다: {selector_str}")
-    return False
 
 
 async def download_one(
@@ -155,51 +77,46 @@ async def download_one(
     label = "매매" if deal_type == "buy" else "전세"
     print(f"  [{label}] {region_key} (시도코드={sido_code}) 다운로드 중...")
 
-    # ── 1. 페이지 이동 ────────────────────────────────────────────
+    # ── 1. 페이지 로드 ─────────────────────────────────────────────
     await page.goto(XLS_URL, wait_until="domcontentloaded", timeout=30_000)
-    await page.wait_for_timeout(1_000)
+    await page.wait_for_timeout(1_500)
 
     if debug:
-        print(f"     현재 URL: {page.url}")
+        print(f"     URL: {page.url}")
         await page.screenshot(path=screenshot_path("01_loaded", region_key))
-        print(f"     스크린샷 저장: {screenshot_path('01_loaded', region_key)}")
 
-    # ── 2. 거래유형 select로 선택 (네비게이션 없이) ────────────────
-    deal_value = SELECTORS["deal_type_buy"] if deal_type == "buy" else SELECTORS["deal_type_rent"]
-    deal_loc = page.locator(SELECTORS["deal_type_select"]).first
-    try:
-        await deal_loc.wait_for(timeout=5_000)
-        await deal_loc.select_option(value=deal_value)
-        await page.wait_for_timeout(500)
-    except PWTimeout:
-        print(f"     경고: 거래유형 select를 찾지 못했습니다 — --diagnose로 확인 필요")
+    # ── 2. 거래유형 hidden 필드 설정 (탭 클릭 없이) ───────────────
+    deal_val = DEAL_TYPE_VALUE.get(deal_type, "")
+    await page.evaluate(
+        f"() => {{ "
+        f"  var el = document.getElementById('srhDelngSecd'); "
+        f"  if (el) el.value = '{deal_val}'; "
+        f"}}"
+    )
 
     if debug:
-        print(f"     현재 URL: {page.url}")
-        await page.screenshot(path=screenshot_path("02_type", region_key))
+        print(f"     URL after deal type set: {page.url}")
+        await page.screenshot(path=screenshot_path("02_deal", region_key))
 
-    # ── 4. 기간 입력 ─────────────────────────────────────────────
-    await fill_date(page, SELECTORS["start_date"], START_DATE)
-    await fill_date(page, SELECTORS["end_date"],   END_DATE)
-
-    # ── 5. 시도 선택 ─────────────────────────────────────────────
-    await select_sido(page, SELECTORS["sido"], sido_code)
+    # ── 3. 시작일 / 종료일 설정 (type=date, 형식: YYYY-MM-DD) ─────
+    await page.fill("input[name='srhFromDt']", START_DATE)
+    await page.fill("input[name='srhToDt']",   END_DATE)
 
     if debug:
-        await page.screenshot(path=screenshot_path("03_region", region_key))
+        await page.screenshot(path=screenshot_path("03_date", region_key))
 
-    # ── 6. 조회 ──────────────────────────────────────────────────
-    await click_first(page, SELECTORS["search"])
-    await page.wait_for_load_state("networkidle", timeout=30_000)
+    # ── 4. 시도 선택 ─────────────────────────────────────────────
+    await page.select_option("select[name='srhSidoCd']", value=sido_code)
+    await page.wait_for_timeout(800)
 
     if debug:
-        await page.screenshot(path=screenshot_path("04_results", region_key))
+        print(f"     URL after sido select: {page.url}")
+        await page.screenshot(path=screenshot_path("04_sido", region_key))
 
-    # ── 7. 다운로드 ───────────────────────────────────────────────
+    # ── 5. CSV 다운로드 ───────────────────────────────────────────
     save_path.parent.mkdir(parents=True, exist_ok=True)
     async with page.expect_download(timeout=60_000) as dl_info:
-        if not await click_first(page, SELECTORS["download_csv"], timeout=5_000, required=False):
-            await click_first(page, SELECTORS["download_excel"])
+        await page.click("button:has-text('CSV 다운')")
 
     dl = await dl_info.value
     suggested = dl.suggested_filename
@@ -208,10 +125,10 @@ async def download_one(
     if debug:
         await page.screenshot(path=screenshot_path("05_done", region_key))
 
-    print(f"  ✓ 저장: {save_path}  (원본파일명: {suggested})")
+    print(f"  ✓ 저장: {save_path.name}  (원본: {suggested})")
 
 
-async def diagnose(headless: bool):
+async def diagnose(headless: bool = False):
     """xls.do 페이지의 폼 구조를 출력하고 HTML을 저장 (셀렉터 파악용)"""
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -224,17 +141,13 @@ async def diagnose(headless: bool):
         await page.wait_for_timeout(2_000)
         print(f"현재 URL: {page.url}\n")
 
-        # HTML 저장
-        html = await page.content()
         html_path = Path("xls_page.html")
-        html_path.write_text(html, encoding="utf-8")
+        html_path.write_text(await page.content(), encoding="utf-8")
         print(f"HTML 저장: {html_path.resolve()}\n")
 
-        # 스크린샷
         await page.screenshot(path="diagnose.png", full_page=True)
         print("스크린샷 저장: diagnose.png\n")
 
-        # 폼 요소 출력
         elements = await page.evaluate("""() => {
             const r = { selects: [], inputs: [], buttons: [] };
             document.querySelectorAll('select').forEach(el => {
@@ -290,12 +203,12 @@ async def run(deal_types: list, headless: bool, debug: bool):
             save_dir = BUY_DIR      if deal_type == "buy"  else RENT_DIR
             label    = "매매"       if deal_type == "buy"  else "전세"
 
-            print(f"\n[{label}] {len(regions)}개 지역 수집 시작 ({START_DATE}~{END_DATE})")
+            print(f"\n[{label}] {len(regions)}개 지역 수집 시작 ({START_DATE} ~ {END_DATE})")
             for region_key, sido_code in regions:
                 save_path = save_dir / f"{region_key}_{YEAR}.csv"
                 try:
                     await download_one(page, deal_type, region_key, sido_code, save_path, debug)
-                    await asyncio.sleep(2)  # 서버 부하 방지
+                    await asyncio.sleep(2)
                 except Exception as exc:
                     print(f"  ✗ {region_key} 실패: {exc}")
                     if debug:
@@ -339,7 +252,7 @@ def main():
     headless = not args.show
 
     if args.diagnose:
-        asyncio.run(diagnose(headless=False))  # 진단 시 항상 브라우저 표시
+        asyncio.run(diagnose(headless=False))
         return
 
     deal_types = ["buy", "rent"] if args.type == "all" else [args.type]
