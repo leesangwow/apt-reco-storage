@@ -20,6 +20,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# 수집은 수십 분이 걸리고 CI 로그·파일로 리다이렉트되는 일이 많다.
+# 기본 블록 버퍼링이면 끝날 때까지 진행 상황이 한 줄도 안 보인다.
+sys.stdout.reconfigure(line_buffering=True)
+
 try:
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 except ImportError:
@@ -50,14 +54,27 @@ BUY_DIR   = REPO_ROOT / "data" / "updates" / "buy"
 RENT_DIR  = REPO_ROOT / "data" / "updates" / "rent"
 
 # 수집 지역: (저장파일명, srhSidoCd 값)
-# --diagnose 에서 확인된 5자리 코드 사용
+# 사이트가 제공하는 시도 전체(16개). 코드는 --diagnose로 확인한 5자리 값.
+# 순서는 시도코드 오름차순 — 사이트 셀렉트 박스와 같다.
 BUY_REGIONS = [
+    ("seoul",         "11000"),  # 서울특별시
+    ("jeonranam",     "12000"),  # 전남광주통합특별시 (광주 포함)
+    ("busan",         "26000"),  # 부산광역시
+    ("daegu",         "27000"),  # 대구광역시
+    ("incheon",       "28000"),  # 인천광역시
+    ("daejeon",       "30000"),  # 대전광역시
+    ("ulsan",         "31000"),  # 울산광역시
+    ("sejong",        "36000"),  # 세종특별자치시
+    ("gyeonggi",      "41000"),  # 경기도 — 가장 큼 (전월세 64MB)
     ("choongbuk",     "43000"),  # 충청북도
-    ("jeonbuktuk",    "52000"),  # 전북특별자치도
-    ("jeonranam",     "12000"),  # 전남광주통합특별시 (구 전라남도)
+    ("choongnam",     "44000"),  # 충청남도
     ("kyeongsangbuk", "47000"),  # 경상북도
+    ("kyeongsangnam", "48000"),  # 경상남도
+    ("jeju",          "50000"),  # 제주특별자치도
+    ("gangwon",       "51000"),  # 강원특별자치도
+    ("jeonbuktuk",    "52000"),  # 전북특별자치도
 ]
-RENT_REGIONS = BUY_REGIONS[:]  # 전세도 같은 지역 수집 (필요시 수정)
+RENT_REGIONS = BUY_REGIONS[:]  # 전월세도 같은 지역 수집
 
 # ─── 거래유형 설정 ─────────────────────────────────────────────────────────
 # 페이지의 fnRtToLr(val) 에 넘기는 값 (srhDelngSecd hidden input 값)

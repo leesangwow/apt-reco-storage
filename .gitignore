@@ -19,7 +19,11 @@ web/out/
 .DS_Store
 Thumbs.db
 
-# 처리 완료된 CSV (로컬 보관용, 저장소 불필요)
+# 수집한 CSV는 저장소에 두지 않는다.
+# 시도 16개 전체를 주 2회 수집하면 회차당 약 300MB이고, git 이력이 감당하지 못한다.
+# DB 적재 후에는 중간 산출물이며 원본은 국토부 사이트에 있다.
+# 자동 수집분은 Actions artifact(14일)로, 로컬 실행분은 작업 디렉터리에만 남는다.
+data/updates/**/*.csv
 data/processed/**/*.csv
 
 # download_csv.py 디버그 산출물

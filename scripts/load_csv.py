@@ -19,6 +19,8 @@ import psycopg2.extras
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+sys.stdout.reconfigure(line_buffering=True)  # CI 로그에 진행 상황이 바로 찍히도록
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_log import RunLogger  # noqa: E402
 

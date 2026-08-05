@@ -55,13 +55,13 @@ export async function GET() {
     );
   }
 
-  // 지역 8조합 × 2단계라 최근 400행이면 충분히 여러 회차를 덮는다.
+  // 회차당 16지역 × 2유형 × 2단계 = 64행. 800행이면 최근 12회차(약 6주)를 덮는다.
   const [{ data: runs, error: runsError }, { data: stats }] = await Promise.all([
     supabase
       .from('ingestion_runs')
       .select('stage, deal_type, region_key, status, finished_at, duration_ms, attempts, rows_total, rows_new, file_bytes, error, run_url')
       .order('finished_at', { ascending: false })
-      .limit(400),
+      .limit(800),
     supabase.from('region_data_stats').select('*'),
   ]);
 

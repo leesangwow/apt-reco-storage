@@ -25,9 +25,10 @@ concurrency:
 jobs:
   collect-and-load:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 시도 16개 × 매매/전월세 = 32회 다운로드 + 적재. 경기도 전월세만 64MB다.
+    timeout-minutes: 180
     permissions:
-      contents: write   # CSV git push 권한
+      contents: read
 
     env:
       COLLECT_TYPE: ${{ github.event.inputs.type || 'all' }}
@@ -91,19 +92,26 @@ jobs:
         if: env.COLLECT_TYPE != 'buy'
         run: python scripts/load_rent_csv.py --dir ./data/updates/rent
 
-      # ── 3단계: CSV 파일을 git에 커밋 (기록 보관) ────────────────────
-      # [skip actions] 없이도 GITHUB_TOKEN 푸시는 다른 워크플로를 트리거하지 않는다.
-      # (load-transactions.yml 중복 실행 없음)
-      - name: CSV git 커밋 & 푸시
+      # ── 3단계: CSV 보관 ─────────────────────────────────────────────
+      # git에 커밋하지 않는다. 16개 지역이면 회차당 약 300MB이고 주 2회 커밋하면
+      # 저장소가 연 30GB 규모로 불어난다 (경기도 전월세 한 파일만 64MB).
+      # DB 적재가 끝나면 CSV는 중간 산출물일 뿐이고 원본은 국토부 사이트에 있으므로,
+      # 문제 추적에 필요한 기간만 artifact로 남긴다.
+      - name: CSV artifact 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collected-csv
+          path: data/updates/**/*.csv
+          retention-days: 14
+          compression-level: 9
+          if-no-files-found: warn
+
+      - name: 수집 요약
+        if: always()
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/updates/
-          if git diff --staged --quiet; then
-            echo "변경된 CSV 없음 — 커밋 생략"
-          else
-            git commit -m "data: 실거래가 CSV 자동 수집 $(date +'%Y-%m-%d')"
-            # 실행 중 다른 커밋이 올라왔을 수 있으므로 rebase 후 푸시
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
+          echo "### 수집 결과" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -sh data/updates/buy data/updates/rent 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+          find data/updates -name '*.csv' | wc -l | xargs echo "CSV 파일 수:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
