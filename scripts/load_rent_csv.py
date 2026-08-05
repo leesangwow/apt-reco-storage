@@ -3,17 +3,27 @@
 
 사용법:
   python scripts/load_rent_csv.py --dir ./data/updates/rent
+  python scripts/load_rent_csv.py --dir ./data/updates/rent --keep-csv   # CSV 보존
+
+적재에 성공한 파일은 삭제하고, 실패한 파일은 원인 파악을 위해 남긴다.
 """
 
 import argparse
 import glob
 import os
+import sys
+import time
 
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+sys.stdout.reconfigure(line_buffering=True)  # CI 로그에 진행 상황이 바로 찍히도록
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from run_log import Entry, RunLogger  # noqa: E402
 
 load_dotenv()
 
@@ -127,19 +137,24 @@ select id from apts where name=%s and gu=%s and dong=%s and area_sqm=%s;
 """
 
 
-def insert_rent_transactions(cur, rows: list[tuple]):
-    psycopg2.extras.execute_values(
+def insert_rent_transactions(cur, rows: list[tuple]) -> int:
+    """대량 insert (중복은 unique constraint로 자동 스킵). 실제 삽입된 행수를 반환."""
+    inserted = psycopg2.extras.execute_values(
         cur,
         """insert into rent_transactions
              (apt_id, contract_date, deposit_man, monthly_man, deal_type, contract_type, floor, contract_period)
            values %s
-           on conflict (apt_id, contract_date, deposit_man, monthly_man, floor, deal_type) do nothing""",
+           on conflict (apt_id, contract_date, deposit_man, monthly_man, floor, deal_type) do nothing
+           returning id""",
         rows,
         page_size=500,
+        fetch=True,
     )
+    return len(inserted)
 
 
-def load_to_db(df: pd.DataFrame, conn):
+def load_to_db(df: pd.DataFrame, conn) -> int:
+    """적재 후 새로 삽입된 거래 행수를 반환한다."""
     cur = conn.cursor()
 
     # 1단계: 고유 단지 목록 추출 후 일괄 upsert
@@ -186,6 +201,7 @@ def load_to_db(df: pd.DataFrame, conn):
 
     # 3단계: 거래 일괄 insert
     print("  거래 insert 중...", flush=True)
+    inserted = 0
     tx_rows = []
     for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
         key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
@@ -203,23 +219,61 @@ def load_to_db(df: pd.DataFrame, conn):
             row["contract_period"] if pd.notna(row.get("contract_period", pd.NA)) else None,
         ))
         if len(tx_rows) >= 1000:
-            insert_rent_transactions(cur, tx_rows)
+            inserted += insert_rent_transactions(cur, tx_rows)
             tx_rows.clear()
             conn.commit()
 
     if tx_rows:
-        insert_rent_transactions(cur, tx_rows)
+        inserted += insert_rent_transactions(cur, tx_rows)
         conn.commit()
 
     cur.close()
+    return inserted
 
 
 # ── 메인 ────────────────────────────────────────────────────
+
+def discard(path: str) -> None:
+    """적재를 마친 CSV를 지운다. 삭제 실패가 적재 결과를 뒤집지는 않는다."""
+    try:
+        size = os.path.getsize(path)
+        os.remove(path)
+        print(f"  CSV 삭제 ({size / 1024 / 1024:.1f} MB)")
+    except OSError as e:
+        print(f"  [경고] CSV 삭제 실패 (무시): {e}")
+
+
+# 일시적 DB 장애(Supabase 재시작, 커넥션 끊김)로 지역 하나가 다음 스케줄까지
+# 통째로 빠지지 않도록 재시도한다. 파싱 오류처럼 다시 해도 같은 결과인 것은
+# 재시도하지 않는다 — 시간만 쓰고 결과가 같다.
+LOAD_MAX_ATTEMPTS = 3
+LOAD_BACKOFF_SEC  = 20
+TRANSIENT = (psycopg2.OperationalError, psycopg2.InterfaceError)
+
+
+def ensure_conn(conn):
+    """끊긴 커넥션이면 새로 연결해 돌려준다."""
+    if conn is not None and not conn.closed:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("select 1")
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return psycopg2.connect(**DB_PARAMS)
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="./data/updates/rent")
     parser.add_argument("--file", default=None, help="특정 파일만 처리")
+    parser.add_argument(
+        "--keep-csv", action="store_true",
+        help="적재에 성공한 CSV를 삭제하지 않고 남긴다 (기본: 삭제)",
+    )
     args = parser.parse_args()
 
     if args.file:
@@ -235,23 +289,61 @@ def main():
         return
 
     print(f"CSV 파일 {len(csv_files)}개 발견")
-    conn = psycopg2.connect(**DB_PARAMS)
+    conn = None
+    run_log = RunLogger()
 
     total = 0
+    failed = 0
     for path in csv_files:
+        region_key = os.path.splitext(os.path.basename(path))[0]
         print(f"\n▶ {os.path.basename(path)}")
-        try:
-            df = load_csv(path)
-            df = preprocess(df)
-            print(f"  유효 행: {len(df):,}")
-            load_to_db(df, conn)
-            total += len(df)
-        except Exception as e:
-            print(f"  [오류] {e}")
-            conn.rollback()
 
-    conn.close()
-    print(f"\n[완료] 총 {total:,}건 적재")
+        entry = Entry()
+        ok = False
+        for attempt in range(1, LOAD_MAX_ATTEMPTS + 1):
+            entry.attempts = attempt
+            try:
+                conn = ensure_conn(conn)
+                df = load_csv(path)
+                df = preprocess(df)
+                entry.rows_total = len(df)
+                print(f"  유효 행: {len(df):,}")
+                entry.rows_new = load_to_db(df, conn)
+                print(f"  신규 적재: {entry.rows_new:,}건")
+                total += len(df)
+                ok = True
+                break
+            except Exception as e:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+
+                if isinstance(e, TRANSIENT) and attempt < LOAD_MAX_ATTEMPTS:
+                    print(f"  ! {attempt}차 실패: {e} — {LOAD_BACKOFF_SEC}초 후 재시도")
+                    time.sleep(LOAD_BACKOFF_SEC)
+                    continue
+
+                print(f"  [오류] {e}")
+                entry.error = str(e).splitlines()[0][:1000]
+                break
+
+        run_log.write("load", "rent", region_key, "success" if ok else "failed", entry)
+
+        if not ok:
+            failed += 1
+            continue
+
+        # DB에 들어갔으면 CSV는 역할이 끝났다. 실패한 파일은 원인 파악을 위해 남긴다.
+        if not args.keep_csv:
+            discard(path)
+
+    if conn is not None and not conn.closed:
+        conn.close()
+    print(f"\n[완료] 총 {total:,}건 처리, 실패 {failed}건")
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

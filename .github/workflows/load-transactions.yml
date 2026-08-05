@@ -1,52 +1,58 @@
 name: Load Transaction CSV
 
+# 사람이 CSV를 직접 올렸을 때(GitHub 웹 업로드 등) 적재하는 경로.
+# 주간 자동 수집은 auto-collect.yml 안에서 다운로드·적재를 함께 처리하므로 여기서 다시 돌지 않는다.
 on:
   push:
     paths:
       - 'data/updates/buy/*.csv'
       - 'data/updates/rent/*.csv'
+  workflow_dispatch:
+
+concurrency:
+  group: load-transactions
+  cancel-in-progress: false
 
 jobs:
-  load-buy:
+  load:
+    # auto-collect 봇이 올린 커밋은 이미 적재를 마친 상태다. 만약 PAT 도입 등으로
+    # 봇 푸시가 이 워크플로를 트리거하게 되더라도 중복 적재가 일어나지 않도록 막는다.
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install pandas psycopg2-binary python-dotenv tqdm
-      - name: Load buy CSVs
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python scripts/load_csv.py --dir ./data/updates/buy
-      - name: Print summary
-        run: echo "[매매] 적재 완료. data/updates/buy/ 파일을 data/processed/buy/ 로 이동해주세요."
+    timeout-minutes: 30
 
-  load-rent:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    env:
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install dependencies
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      # 적재에는 Playwright가 필요 없으므로 requirements 전체 대신 필요한 것만 설치한다.
+      - name: 의존성 설치
         run: pip install pandas psycopg2-binary python-dotenv tqdm
-      - name: Load rent CSVs
-        env:
-          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
-          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
-          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python scripts/load_rent_csv.py --dir ./data/updates/rent
-      - name: Print summary
-        run: echo "[전세] 적재 완료. data/updates/rent/ 파일을 data/processed/rent/ 로 이동해주세요."
+
+      - name: 매매 CSV 적재
+        run: |
+          if [ -n "$(find ./data/updates/buy -name '*.csv' -print -quit 2>/dev/null)" ]; then
+            python scripts/load_csv.py --dir ./data/updates/buy
+          else
+            echo "매매 CSV 없음 — 건너뜀"
+          fi
+
+      - name: 전월세 CSV 적재
+        run: |
+          if [ -n "$(find ./data/updates/rent -name '*.csv' -print -quit 2>/dev/null)" ]; then
+            python scripts/load_rent_csv.py --dir ./data/updates/rent
+          else
+            echo "전월세 CSV 없음 — 건너뜀"
+          fi

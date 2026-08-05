@@ -1,0 +1,141 @@
+name: 실거래가 CSV 자동 수집
+
+on:
+  schedule:
+    # [운용 테스트 · 2026-08-06 ~ 08-13] 매일 새벽 2시(KST) 실행.
+    # cron은 UTC 기준이라 02:00 KST = 17:00 UTC 전날.
+    #
+    # 테스트가 끝나면 아래 주 2회(월·목 오전 10시)로 되돌릴 것:
+    #   - cron: '0 1 * * 1,4'
+    # 주 2회로 두는 이유는 Supabase 무료 플랜의 자동 일시정지 때문이다.
+    # 주 1회(7일 간격)면 정지 임계에 걸쳐 적재가 접속 실패로 죽는다.
+    - cron: '0 17 * * *'
+  # Actions 탭에서 수동 실행 가능
+  workflow_dispatch:
+    inputs:
+      type:
+        description: '수집 유형'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, buy, rent]
+      regions:
+        description: '특정 지역만 (쉼표 구분, 비우면 전체). 예: gyeonggi,seoul'
+        required: false
+        default: ''
+        type: string
+
+# 수집이 늦어져 다음 주 실행과 겹치면 DB에 동시 적재가 일어난다. 앞선 실행을 끝까지 기다린다.
+concurrency:
+  group: auto-collect
+  cancel-in-progress: false
+
+jobs:
+  collect-and-load:
+    runs-on: ubuntu-latest
+    # 시도 16개 × 매매/전월세 = 32회 다운로드 + 적재. 경기도 전월세만 64MB다.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+
+    env:
+      COLLECT_TYPE:    ${{ github.event.inputs.type || 'all' }}
+      COLLECT_REGIONS: ${{ github.event.inputs.regions || '' }}
+      # 다운로드·적재 모두 ingestion_runs에 실행 이력을 남긴다 (관리자 페이지용).
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: 의존성 설치
+        run: pip install -r scripts/requirements.txt
+
+      # Chromium 바이너리(~150MB)는 매 실행 재다운로드할 이유가 없다.
+      - name: Playwright 브라우저 캐시
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scripts/requirements.txt') }}
+
+      - name: Playwright Chromium 설치
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            playwright install-deps chromium   # 시스템 라이브러리만 (바이너리는 캐시 사용)
+          else
+            playwright install chromium --with-deps
+          fi
+
+      # ── 1단계: 웹사이트에서 CSV 다운로드 ───────────────────────────
+      # --debug: 실패 시 원인 파악용 단계별 스크린샷 (아래 artifact로 업로드)
+      # regions 입력이 있으면 그 지역만 — 실패한 지역만 골라 재실행할 때 쓴다.
+      - name: CSV 다운로드
+        run: |
+          if [ -n "$COLLECT_REGIONS" ]; then
+            python scripts/download_csv.py --type "$COLLECT_TYPE" --region "$COLLECT_REGIONS" --debug
+          else
+            python scripts/download_csv.py --type "$COLLECT_TYPE" --debug
+          fi
+
+      - name: 실패 시 스크린샷 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-debug-screenshots
+          path: debug_*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── 2단계: CSV 보관 ─────────────────────────────────────────────
+      # git에 커밋하지 않는다. 16개 지역이면 회차당 약 300MB이고 주 2회 커밋하면
+      # 저장소가 연 30GB 규모로 불어난다 (경기도 전월세 한 파일만 64MB).
+      # DB 적재가 끝나면 CSV는 중간 산출물일 뿐이고 원본은 국토부 사이트에 있으므로,
+      # 문제 추적에 필요한 기간만 artifact로 남긴다.
+      #
+      # 적재 단계보다 반드시 먼저 와야 한다. 로더가 적재에 성공한 CSV를 지우므로
+      # 순서가 바뀌면 artifact가 빈 채로 올라간다.
+      - name: CSV artifact 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collected-csv
+          path: data/updates/**/*.csv
+          retention-days: 14
+          compression-level: 9
+          if-no-files-found: warn
+
+      - name: 수집 요약
+        if: always()
+        run: |
+          {
+            echo "### 수집 결과"
+            echo '```'
+            du -sh data/updates/buy data/updates/rent 2>/dev/null || true
+            echo "CSV 파일 수: $(find data/updates -name '*.csv' | wc -l)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 3단계: Supabase 적재 (성공한 CSV는 적재 후 삭제된다) ────────
+      # 두 단계는 서로 독립이다. 조건을 그냥 두면 GitHub이 success()를 암묵적으로
+      # 붙여서, 매매가 실패하면 전월세가 통째로 건너뛰어진다. 매매 일부가 실패해도
+      # 전월세는 적재되어야 하고, 다운로드가 일부만 성공했어도 받은 것은 넣어야 한다.
+      # (always() 대신 !cancelled() — 사용자가 취소한 경우까지 강행하지는 않는다)
+      - name: Supabase 적재 (매매)
+        if: ${{ !cancelled() && env.COLLECT_TYPE != 'rent' }}
+        run: python scripts/load_csv.py --dir ./data/updates/buy
+
+      - name: Supabase 적재 (전월세)
+        if: ${{ !cancelled() && env.COLLECT_TYPE != 'buy' }}
+        run: python scripts/load_rent_csv.py --dir ./data/updates/rent
