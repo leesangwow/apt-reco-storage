@@ -85,7 +85,14 @@ async def download_one(
         print(f"     URL: {page.url}")
         await page.screenshot(path=screenshot_path("01_loaded", region_key))
 
-    # ── 2. 거래유형 hidden 필드 설정 (탭 클릭 없이) ───────────────
+    # ── 1-b. 아파트 탭 활성화 (ID 셀렉터로 폼 탭 정확히 클릭) ────
+    await page.click("a#xlsTab1")
+    await page.wait_for_timeout(800)
+
+    if debug:
+        await page.screenshot(path=screenshot_path("01b_tab", region_key))
+
+    # ── 2. 거래유형 hidden 필드 설정 ─────────────────────────────
     deal_val = DEAL_TYPE_VALUE.get(deal_type, "")
     await page.evaluate(
         f"() => {{ "
