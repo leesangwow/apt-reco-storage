@@ -3,6 +3,9 @@
 
 사용법:
   python scripts/load_rent_csv.py --dir ./data/updates/rent
+  python scripts/load_rent_csv.py --dir ./data/updates/rent --keep-csv   # CSV 보존
+
+적재에 성공한 파일은 삭제하고, 실패한 파일은 원인 파악을 위해 남긴다.
 """
 
 import argparse
@@ -229,10 +232,24 @@ def load_to_db(df: pd.DataFrame, conn) -> int:
 
 # ── 메인 ────────────────────────────────────────────────────
 
+def discard(path: str) -> None:
+    """적재를 마친 CSV를 지운다. 삭제 실패가 적재 결과를 뒤집지는 않는다."""
+    try:
+        size = os.path.getsize(path)
+        os.remove(path)
+        print(f"  CSV 삭제 ({size / 1024 / 1024:.1f} MB)")
+    except OSError as e:
+        print(f"  [경고] CSV 삭제 실패 (무시): {e}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="./data/updates/rent")
     parser.add_argument("--file", default=None, help="특정 파일만 처리")
+    parser.add_argument(
+        "--keep-csv", action="store_true",
+        help="적재에 성공한 CSV를 삭제하지 않고 남긴다 (기본: 삭제)",
+    )
     args = parser.parse_args()
 
     if args.file:
@@ -269,6 +286,11 @@ def main():
             print(f"  [오류] {e}")
             conn.rollback()
             failed += 1
+            continue
+
+        # DB에 들어갔으면 CSV는 역할이 끝났다. 실패한 파일은 원인 파악을 위해 남긴다.
+        if not args.keep_csv:
+            discard(path)
 
     conn.close()
     print(f"\n[완료] 총 {total:,}건 처리, 실패 {failed}건")

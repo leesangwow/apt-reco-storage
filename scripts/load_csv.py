@@ -3,9 +3,12 @@
 
 사용법:
   pip install pandas psycopg2-binary python-dotenv tqdm
-  python scripts/load_csv.py --dir ./data/csv
+  python scripts/load_csv.py --dir ./data/updates/buy
+  python scripts/load_csv.py --dir ./data/updates/buy --keep-csv   # CSV 보존
 
-CSV 파일은 data/csv/ 폴더 안에 여러 개 넣어두면 됩니다.
+폴더 안의 모든 CSV를 적재한다. 적재에 성공한 파일은 삭제하고
+(원본은 국토부 사이트에 있고 DB가 실제 저장소다), 실패한 파일은
+원인 파악을 위해 남긴다. --keep-csv로 삭제를 끌 수 있다.
 """
 
 import argparse
@@ -246,9 +249,23 @@ def load_to_db(df: pd.DataFrame, conn) -> int:
 
 # ── 메인 ────────────────────────────────────────────────────
 
+def discard(path: str) -> None:
+    """적재를 마친 CSV를 지운다. 삭제 실패가 적재 결과를 뒤집지는 않는다."""
+    try:
+        size = os.path.getsize(path)
+        os.remove(path)
+        print(f"  CSV 삭제 ({size / 1024 / 1024:.1f} MB)")
+    except OSError as e:
+        print(f"  [경고] CSV 삭제 실패 (무시): {e}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="./data/csv", help="CSV 파일이 있는 폴더")
+    parser.add_argument(
+        "--keep-csv", action="store_true",
+        help="적재에 성공한 CSV를 삭제하지 않고 남긴다 (기본: 삭제)",
+    )
     args = parser.parse_args()
 
     csv_files = sorted(set(
@@ -283,6 +300,11 @@ def main():
             print(f"  [오류] {e}")
             conn.rollback()
             failed += 1
+            continue
+
+        # DB에 들어갔으면 CSV는 역할이 끝났다. 실패한 파일은 원인 파악을 위해 남긴다.
+        if not args.keep_csv:
+            discard(path)
 
     conn.close()
     print(f"\n[완료] 총 {total_rows:,}건 처리, 실패 {failed}건")
