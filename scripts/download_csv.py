@@ -6,6 +6,7 @@
   pip install playwright
   playwright install chromium
 
+  python scripts/download_csv.py --diagnose         # 페이지 폼 구조 확인 (셀렉터 파악용)
   python scripts/download_csv.py --type buy         # 매매 CSV
   python scripts/download_csv.py --type rent        # 전세 CSV
   python scripts/download_csv.py --type all         # 전체 (기본값)
@@ -53,14 +54,18 @@ BUY_REGIONS = [
 ]
 RENT_REGIONS = BUY_REGIONS[:]  # 전세도 같은 지역 수집 (필요시 수정)
 
-# ─── 셀렉터 ── 사이트 변경 시 이 값만 수정하면 됩니다 ─────────────────────
+# ─── 셀렉터 ── --diagnose 결과 확인 후 이 값을 업데이트하세요 ────────────────
 SELECTORS = {
-    # 아파트 탭/버튼
-    "tab_apt": "text=아파트",
-
-    # 거래유형 (매매/전세) - 탭 또는 라디오 버튼
-    "tab_buy":  "text=매매",
-    "tab_rent": "text=전세",
+    # 거래유형 select (--diagnose 로 name/id 확인 후 업데이트)
+    # 매매 value, 전세 value도 option 목록에서 확인 필요
+    "deal_type_select": (
+        "select[name='srhThingSecd'],"
+        "select[name='dealType'],"
+        "select[name='thingSecd'],"
+        "select[name='srhDealType']"
+    ),
+    "deal_type_buy":  "A",   # 매매 option value (--diagnose 후 확인)
+    "deal_type_rent": "B",   # 전세 option value (--diagnose 후 확인)
 
     # 기간 입력 (YYYYMMDD 형식)
     "start_date": (
@@ -155,19 +160,22 @@ async def download_one(
     await page.wait_for_timeout(1_000)
 
     if debug:
+        print(f"     현재 URL: {page.url}")
         await page.screenshot(path=screenshot_path("01_loaded", region_key))
         print(f"     스크린샷 저장: {screenshot_path('01_loaded', region_key)}")
 
-    # ── 2. 아파트 탭 선택 ─────────────────────────────────────────
-    await click_first(page, SELECTORS["tab_apt"], required=False)
-    await page.wait_for_timeout(500)
-
-    # ── 3. 거래유형 선택 (매매 / 전세) ────────────────────────────
-    tab_key = "tab_buy" if deal_type == "buy" else "tab_rent"
-    await click_first(page, SELECTORS[tab_key], required=False)
-    await page.wait_for_timeout(500)
+    # ── 2. 거래유형 select로 선택 (네비게이션 없이) ────────────────
+    deal_value = SELECTORS["deal_type_buy"] if deal_type == "buy" else SELECTORS["deal_type_rent"]
+    deal_loc = page.locator(SELECTORS["deal_type_select"]).first
+    try:
+        await deal_loc.wait_for(timeout=5_000)
+        await deal_loc.select_option(value=deal_value)
+        await page.wait_for_timeout(500)
+    except PWTimeout:
+        print(f"     경고: 거래유형 select를 찾지 못했습니다 — --diagnose로 확인 필요")
 
     if debug:
+        print(f"     현재 URL: {page.url}")
         await page.screenshot(path=screenshot_path("02_type", region_key))
 
     # ── 4. 기간 입력 ─────────────────────────────────────────────
@@ -201,6 +209,69 @@ async def download_one(
         await page.screenshot(path=screenshot_path("05_done", region_key))
 
     print(f"  ✓ 저장: {save_path}  (원본파일명: {suggested})")
+
+
+async def diagnose(headless: bool):
+    """xls.do 페이지의 폼 구조를 출력하고 HTML을 저장 (셀렉터 파악용)"""
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=headless,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        page = await browser.new_page()
+        print(f"페이지 로딩 중: {XLS_URL}")
+        await page.goto(XLS_URL, wait_until="domcontentloaded", timeout=30_000)
+        await page.wait_for_timeout(2_000)
+        print(f"현재 URL: {page.url}\n")
+
+        # HTML 저장
+        html = await page.content()
+        html_path = Path("xls_page.html")
+        html_path.write_text(html, encoding="utf-8")
+        print(f"HTML 저장: {html_path.resolve()}\n")
+
+        # 스크린샷
+        await page.screenshot(path="diagnose.png", full_page=True)
+        print("스크린샷 저장: diagnose.png\n")
+
+        # 폼 요소 출력
+        elements = await page.evaluate("""() => {
+            const r = { selects: [], inputs: [], buttons: [] };
+            document.querySelectorAll('select').forEach(el => {
+                r.selects.push({
+                    name: el.name, id: el.id,
+                    options: Array.from(el.options).map(o => o.value + ' → ' + o.text.trim())
+                });
+            });
+            document.querySelectorAll('input').forEach(el => {
+                r.inputs.push({
+                    name: el.name, id: el.id, type: el.type,
+                    value: el.value, placeholder: el.placeholder
+                });
+            });
+            document.querySelectorAll('button, input[type=submit], a[onclick]').forEach(el => {
+                const txt = (el.innerText || el.value || '').trim();
+                if (txt) r.buttons.push({ tag: el.tagName, text: txt, id: el.id, name: el.name });
+            });
+            return r;
+        }""")
+
+        print("=== SELECT 요소 ===")
+        for s in elements["selects"]:
+            print(f"  name='{s['name']}' id='{s['id']}'")
+            for opt in s["options"]:
+                print(f"    {opt}")
+
+        print("\n=== INPUT 요소 ===")
+        for i in elements["inputs"]:
+            print(f"  type={i['type']} name='{i['name']}' id='{i['id']}' placeholder='{i['placeholder']}'")
+
+        print("\n=== BUTTON/SUBMIT/LINK 요소 ===")
+        for b in elements["buttons"]:
+            print(f"  <{b['tag']}> text='{b['text']}' id='{b['id']}' name='{b['name']}'")
+
+        await browser.close()
+        print("\n확인 후 SELECTORS 딕셔너리를 업데이트하세요.")
 
 
 async def run(deal_types: list, headless: bool, debug: bool):
@@ -248,6 +319,10 @@ async def run(deal_types: list, headless: bool, debug: bool):
 def main():
     parser = argparse.ArgumentParser(description="국토부 실거래가 CSV 자동 다운로드")
     parser.add_argument(
+        "--diagnose", action="store_true",
+        help="xls.do 페이지 폼 구조 출력 + HTML 저장 (셀렉터 파악용)",
+    )
+    parser.add_argument(
         "--type", choices=["buy", "rent", "all"], default="all",
         help="수집 유형 (기본값: all)",
     )
@@ -261,9 +336,13 @@ def main():
     )
     args = parser.parse_args()
 
-    deal_types = ["buy", "rent"] if args.type == "all" else [args.type]
-    headless   = not args.show
+    headless = not args.show
 
+    if args.diagnose:
+        asyncio.run(diagnose(headless=False))  # 진단 시 항상 브라우저 표시
+        return
+
+    deal_types = ["buy", "rent"] if args.type == "all" else [args.type]
     asyncio.run(run(deal_types, headless, args.debug))
 
 
