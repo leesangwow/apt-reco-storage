@@ -37,7 +37,6 @@ interface StatRow {
   sido: string;
   tx_count: number;
   latest_contract_date: string | null;
-  last_inserted_at: string | null;
 }
 
 export async function GET() {
@@ -99,7 +98,6 @@ export async function GET() {
         runUrl:     download?.run_url ?? load?.run_url ?? null,
         txCount:            stat?.tx_count ?? 0,
         latestContractDate: stat?.latest_contract_date ?? null,
-        lastInsertedAt:     stat?.last_inserted_at ?? null,
       };
     }),
   );

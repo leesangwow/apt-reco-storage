@@ -40,11 +40,12 @@ create table if not exists rent_transactions (
   contract_date   date not null,
   deposit_man     int not null,          -- 보증금(만원)
   monthly_man     int not null default 0,-- 월세금(만원), 전세는 0
-  deal_type       text,                  -- 전세 | 월세
+  deal_type       text not null,         -- 전세 | 월세
   contract_type   text,                  -- 신규 | 갱신
   floor           int,
   contract_period text,                  -- 예: '202610~202810'
-  created_at      timestamptz default now(),
+  -- 운영 DB의 rent_transactions에는 created_at이 없다 (transactions와 다름).
+  -- 적재 시각은 ingestion_runs가 갖고 있어 따로 필요하지 않다.
 
   -- load_rent_csv.py의 ON CONFLICT 대상.
   -- 제약 이름은 PostgreSQL이 자동 생성한다 (운영 DB:
@@ -107,21 +108,19 @@ alter table ingestion_runs enable row level security;
 
 -- ─── region_data_stats 뷰 ───────────────────────────────────────────────────
 -- 관리자 페이지의 "데이터 자체가 신선한가" 쪽 지표.
--- last_inserted_at은 max(created_at)이라 '마지막으로 새 행이 들어온 시각'이다
--- (재적재로 걸러진 중복 행은 created_at이 갱신되지 않는다).
+-- 적재가 언제 돌았는지는 ingestion_runs가 갖고 있으므로 여기서는
+-- 데이터 자체의 최신성(최신 계약일)과 규모만 본다.
 create or replace view region_data_stats as
   select 'buy'::text as deal_type, a.sido,
-         count(*)::bigint  as tx_count,
-         max(t.contract_date) as latest_contract_date,
-         max(t.created_at)    as last_inserted_at
+         count(*)::bigint     as tx_count,
+         max(t.contract_date) as latest_contract_date
     from transactions t
     join apts a on a.id = t.apt_id
    group by a.sido
   union all
   select 'rent'::text, a.sido,
          count(*)::bigint,
-         max(r.contract_date),
-         max(r.created_at)
+         max(r.contract_date)
     from rent_transactions r
     join apts a on a.id = r.apt_id
    group by a.sido;

@@ -19,7 +19,6 @@ interface Row {
   runUrl: string | null;
   txCount: number;
   latestContractDate: string | null;
-  lastInsertedAt: string | null;
 }
 
 /** 주 2회(월·목) 스케줄 기준, 4일 넘게 안 돌면 지연으로 본다. */
