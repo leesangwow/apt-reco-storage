@@ -100,6 +100,11 @@ DOWNLOAD_TIMEOUT_MS = 300_000
 MAX_ATTEMPTS        = 3
 RETRY_BACKOFF_SEC   = 30   # 재시도 전 대기 (서버 회복 시간)
 BETWEEN_REGIONS_SEC = 5    # 지역 간 간격
+
+# 사이트가 통째로 응답하지 않을 때(심야 점검 등) 남은 지역을 계속 두드려봐야 전부 실패한다.
+# 2026-08-06 새벽 실행이 32건 × 3회 재시도를 다 돌면서 2시간을 태우고 한 건도 못 받았다.
+# 연속으로 이만큼 지역이 실패하면 개별 지역 문제가 아니라고 보고 나머지를 포기한다.
+ABORT_AFTER_CONSECUTIVE_FAILURES = 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -262,61 +267,93 @@ async def run(deal_types: list, headless: bool, debug: bool, only: set | None = 
 
         page.on("dialog", lambda d: asyncio.ensure_future(on_dialog(d)))
 
-        failed = []
+        # 거래유형·지역을 한 줄로 펼쳐 둔다. 중간에 포기할 때 남은 작업이
+        # 무엇인지 그대로 집어내려면 평평한 목록이 필요하다.
+        jobs = []
         for deal_type in deal_types:
-            regions  = BUY_REGIONS  if deal_type == "buy"  else RENT_REGIONS
-            save_dir = BUY_DIR      if deal_type == "buy"  else RENT_DIR
-            label    = DEAL_LABEL[deal_type]
-
+            regions = BUY_REGIONS if deal_type == "buy" else RENT_REGIONS
             if only:
                 regions = [r for r in regions if r[0] in only]
+            jobs += [(deal_type, region_key, sido_code) for region_key, sido_code in regions]
 
-            print(f"\n[{label}] {len(regions)}개 지역 수집 시작 ({START_DATE} ~ {END_DATE})")
-            for region_key, sido_code in regions:
-                # 롤링 1년 창이라 연도를 파일명에 넣지 않는다.
-                # (연도를 넣으면 해가 바뀔 때 옛 파일이 남아 매 실행마다 불필요하게 재적재된다)
-                save_path = save_dir / f"{region_key}.csv"
+        failed  = []
+        skipped = []
+        consecutive_failures = 0
+        current_deal = None
 
-                # 국토부 서버는 조회량이 많으면 응답이 크게 느려진다.
-                # 일시적 지연으로 한 지역이 통째로 빠지지 않도록 재시도한다.
-                try:
-                    with run_log.track("download", deal_type, region_key) as entry:
-                        entry.from_date = START_DATE
-                        entry.to_date   = END_DATE
+        for idx, (deal_type, region_key, sido_code) in enumerate(jobs):
+            if deal_type != current_deal:
+                current_deal = deal_type
+                count = sum(1 for job in jobs if job[0] == deal_type)
+                print(
+                    f"\n[{DEAL_LABEL[deal_type]}] {count}개 지역 수집 시작"
+                    f" ({START_DATE} ~ {END_DATE})"
+                )
 
-                        for attempt in range(1, MAX_ATTEMPTS + 1):
-                            entry.attempts = attempt
-                            try:
-                                await download_one(
-                                    page, deal_type, region_key, sido_code,
-                                    save_path, alerts, debug,
-                                )
-                                entry.file_bytes = save_path.stat().st_size
-                                await asyncio.sleep(BETWEEN_REGIONS_SEC)
-                                break
-                            except Exception as exc:
-                                last_error = str(exc).splitlines()[0]
-                                if attempt >= MAX_ATTEMPTS:
-                                    raise
-                                print(
-                                    f"  ! {region_key} {attempt}차 실패: {last_error}"
-                                    f" — {RETRY_BACKOFF_SEC}초 후 재시도"
-                                )
-                                await asyncio.sleep(RETRY_BACKOFF_SEC)
-                except Exception as exc:
-                    last_error = str(exc).splitlines()[0]
-                    print(f"  ✗ {region_key} 실패 ({MAX_ATTEMPTS}회 시도): {last_error}")
-                    if debug:
+            save_dir = BUY_DIR if deal_type == "buy" else RENT_DIR
+            # 롤링 1년 창이라 연도를 파일명에 넣지 않는다.
+            # (연도를 넣으면 해가 바뀔 때 옛 파일이 남아 매 실행마다 불필요하게 재적재된다)
+            save_path = save_dir / f"{region_key}.csv"
+
+            # 국토부 서버는 조회량이 많으면 응답이 크게 느려진다.
+            # 일시적 지연으로 한 지역이 통째로 빠지지 않도록 재시도한다.
+            try:
+                with run_log.track("download", deal_type, region_key) as entry:
+                    entry.from_date = START_DATE
+                    entry.to_date   = END_DATE
+
+                    for attempt in range(1, MAX_ATTEMPTS + 1):
+                        entry.attempts = attempt
                         try:
-                            await page.screenshot(path=screenshot_path("error", region_key))
-                        except Exception:
-                            pass
-                    failed.append((deal_type, region_key, last_error))
+                            await download_one(
+                                page, deal_type, region_key, sido_code,
+                                save_path, alerts, debug,
+                            )
+                            entry.file_bytes = save_path.stat().st_size
+                            await asyncio.sleep(BETWEEN_REGIONS_SEC)
+                            break
+                        except Exception as exc:
+                            last_error = str(exc).splitlines()[0]
+                            if attempt >= MAX_ATTEMPTS:
+                                raise
+                            print(
+                                f"  ! {region_key} {attempt}차 실패: {last_error}"
+                                f" — {RETRY_BACKOFF_SEC}초 후 재시도"
+                            )
+                            await asyncio.sleep(RETRY_BACKOFF_SEC)
+            except Exception as exc:
+                last_error = str(exc).splitlines()[0]
+                print(f"  ✗ {region_key} 실패 ({MAX_ATTEMPTS}회 시도): {last_error}")
+                if debug:
+                    try:
+                        await page.screenshot(path=screenshot_path("error", region_key))
+                    except Exception:
+                        pass
+                failed.append((deal_type, region_key, last_error))
+
+                consecutive_failures += 1
+                if consecutive_failures >= ABORT_AFTER_CONSECUTIVE_FAILURES:
+                    skipped = jobs[idx + 1:]
+                    print(
+                        f"\n연속 {consecutive_failures}개 지역이 모두 실패했습니다"
+                        f" (지역마다 {MAX_ATTEMPTS}회 시도). 개별 지역 문제가 아니라"
+                        f" 사이트가 통째로 응답하지 않는 상황으로 보고"
+                        f" 남은 {len(skipped)}건을 포기합니다."
+                    )
+                    break
+            else:
+                # 한 번이라도 성공하면 사이트는 살아 있다. 카운터를 되돌린다.
+                consecutive_failures = 0
 
         await browser.close()
 
+    if skipped:
+        print(f"\n건너뛴 목록 ({len(skipped)}건):")
+        for dt, rk, _ in skipped:
+            print(f"  - [{dt}] {rk}")
+
     if failed:
-        print("\n실패 목록:")
+        print(f"\n실패 목록 ({len(failed)}건):")
         for dt, rk, err in failed:
             print(f"  - [{dt}] {rk}: {err}")
         sys.exit(1)
