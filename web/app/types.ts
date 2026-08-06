@@ -1,4 +1,4 @@
-export type SortKey = 'diff' | 'dist' | 'area' | 'year' | 'price';
+export type SortKey = 'diff' | 'dist' | 'area' | 'year' | 'price' | 'deals';
 export type SortDir = 'asc' | 'desc';
 export type ScopeKey = 'dong' | 'gu' | 'city' | 'seoul' | string;
 

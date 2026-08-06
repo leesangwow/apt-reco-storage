@@ -13,8 +13,6 @@ export async function GET(req: NextRequest) {
   const page            = Number(p.get('page')     ?? '0');
   const band            = p.get('band')            ?? '5%';
   const freshnessFilter = p.get('freshnessFilter');
-  // 연간 최소 거래건수. freshness(최신성)와 별개 축이라 따로 받는다.
-  const minAnnual       = Number(p.get('minAnnual') ?? '0');
   const regionId        = p.get('regionId');
 
   // 가격대 탐색 모드
@@ -93,9 +91,6 @@ export async function GET(req: NextRequest) {
     query = query.in('freshness', ['fresh_high', 'fresh_mid']);
   }
 
-  // 연간 거래량 필터
-  if (minAnnual > 0) query = query.gte('deal_count_12m', minAnnual);
-
   const { data: rows, error: re } = await query.limit(500);
   if (re) return NextResponse.json({ error: re.message }, { status: 500 });
 
@@ -116,6 +111,7 @@ export async function GET(req: NextRequest) {
     else if (sort === 'price') v = Number(a.avg_deposit) - Number(b.avg_deposit);
     else if (sort === 'area')  v = Number(a.pyeong) - Number(b.pyeong);
     else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
+    else if (sort === 'deals') v = Number(a.deal_count_12m ?? 0) - Number(b.deal_count_12m ?? 0);
     else                       v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
     return asc ? v : -v;
   });

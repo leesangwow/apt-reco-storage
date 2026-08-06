@@ -83,8 +83,6 @@ export default function RecommendContent() {
   const [band, setBand] = useState('5%');
   // null=전체, 'fresh_high'=1개월3건, 'fresh_mid_up'=3개월3건이상
   const [freshnessFilter, setFreshnessFilter] = useState<null | 'fresh_high' | 'fresh_mid_up'>(null);
-  // 연간 최소 거래건수. 0=전체. 최신성과 다른 축이라 freshnessFilter와 함께 걸 수 있다.
-  const [minAnnual, setMinAnnual] = useState(0);
   const [addedRegions, setAddedRegions] = useState<AddedRegion[]>([]);
   const [regionId, setRegionId] = useState<string | null>(null);
 
@@ -129,7 +127,6 @@ export default function RecommendContent() {
         page: String(page),
         band,
         ...(freshnessFilter ? { freshnessFilter } : {}),
-        ...(minAnnual ? { minAnnual: String(minAnnual) } : {}),
         ...(regionId ? { regionId } : {}),
       });
       const endpoint = dealMode === 'rent' ? '/api/rent' : '/api/recommend';
@@ -146,7 +143,7 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, minAnnual, regionId, dealMode]);
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId, dealMode]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -186,7 +183,7 @@ export default function RecommendContent() {
   }, [q, searchOpen]);
 
   function handleSetSort(k: SortKey) {
-    const defaults: Record<SortKey, SortDir> = { diff: 'asc', dist: 'asc', area: 'desc', year: 'desc', price: 'asc' };
+    const defaults: Record<SortKey, SortDir> = { diff: 'asc', dist: 'asc', area: 'desc', year: 'desc', price: 'asc', deals: 'desc' };
     if (sort === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSort(k); setSortDir(defaults[k]); }
     setPage(0);
@@ -245,6 +242,7 @@ export default function RecommendContent() {
     { key: 'price', label: '가격순' },
     { key: 'area', label: '평형순' },
     { key: 'year', label: '준공순' },
+    { key: 'deals', label: '거래량순' },
   ];
 
   return (
@@ -385,25 +383,6 @@ export default function RecommendContent() {
                 className={`flex items-center gap-[5px] flex-none border cursor-pointer text-[12px] font-bold px-[12px] py-[6px] rounded-[10px] transition-all ${on ? 'bg-[#1A1A1A] text-white border-transparent' : 'border-[#EAEAE4] bg-white text-[#76766E]'}`}
               >
                 <span className="w-[6px] h-[6px] rounded-full flex-none" style={{ background: on ? 'white' : opt.dot }} />
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* 연간 거래량 filter — 최신성과 다른 축이라 신뢰도 칩과 함께 걸 수 있다 */}
-        <div className="flex gap-[6px] px-[18px] pb-[10px] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden items-center">
-          <span className="text-[11px] text-[#A0A098] font-bold flex-none">거래량</span>
-          {([
-            { key: 0,  label: '전체' },
-            { key: 12, label: '연 12건↑' },
-            { key: 24, label: '연 24건↑' },
-          ] as const).map(opt => {
-            const on = minAnnual === opt.key;
-            return (
-              <button key={opt.key} onClick={() => { setMinAnnual(opt.key); setPage(0); }}
-                className={`flex-none border cursor-pointer text-[12px] px-[12px] py-[6px] rounded-[10px] whitespace-nowrap transition-all ${on ? 'bg-[#1A1A1A] text-white font-extrabold border-transparent' : 'border-[#EAEAE4] bg-white text-[#80807A] font-semibold'}`}
-              >
                 {opt.label}
               </button>
             );
