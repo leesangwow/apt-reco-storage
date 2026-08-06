@@ -144,22 +144,18 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── DB 적재 ─────────────────────────────────────────────────
 
-UPSERT_APT = """
-insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
-values (%s, %s, %s, %s, %s, %s, %s)
-on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
-returning id;
-"""
-
+# 단지 upsert/거래 insert의 SQL은 각 함수 안에 인라인으로 있다.
+# 이 조회만 캐시에 빠진 단지를 메우는 안전망으로 따로 쓴다.
 SELECT_APT = """
 select id from apts where name=%s and gu=%s and dong=%s and area_sqm=%s;
 """
 
-INSERT_TX = """
-insert into transactions (apt_id, contract_date, price_man, floor, deal_type)
-values %s
-on conflict do nothing;
-"""
+# 한 statement에 묶는 행수. 왕복 횟수를 줄이는 값이라 클수록 좋지만,
+# 쿼리 문자열이 그만큼 커진다 (거래 1,000행이면 약 60KB).
+APT_PAGE_SIZE = 500
+TX_PAGE_SIZE  = 1000
+# 커밋 간격. 커밋도 왕복 한 번이라 행마다 하면 그 비용이 그대로 쌓인다.
+TX_COMMIT_ROWS = 10_000
 
 
 def copy_transactions(cur, rows: list[tuple]) -> int:
@@ -171,10 +167,49 @@ def copy_transactions(cur, rows: list[tuple]) -> int:
            on conflict (apt_id, contract_date, price_man, floor) do nothing
            returning id""",
         rows,
-        page_size=500,
+        page_size=TX_PAGE_SIZE,
         fetch=True,
     )
     return len(inserted)
+
+
+def upsert_apts(cur, conn, apt_rows: list[tuple]) -> dict[tuple, int]:
+    """단지를 일괄 upsert하고 (name, gu, dong, area_sqm) → id 캐시를 돌려준다."""
+    # fetch=True가 핵심이다. 빼면 psycopg2가 page_size 단위로 execute를 반복하면서
+    # 앞 페이지의 RETURNING 결과를 덮어쓰고, 뒤이은 cur.fetchall()이 마지막 한 페이지만
+    # 돌려준다(psycopg2.extras.execute_values 구현 참고). 예전 코드가 그래서 나머지
+    # 단지를 전부 단건 SELECT로 다시 읽었고, 그 왕복이 적재 시간의 대부분이었다.
+    returned = psycopg2.extras.execute_values(
+        cur,
+        """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
+           values %s
+           on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
+           returning id, name, gu, dong, area_sqm""",
+        apt_rows, page_size=APT_PAGE_SIZE, fetch=True,
+    )
+    conn.commit()
+    return {
+        (name, gu, dong, float(area)): apt_id
+        for apt_id, name, gu, dong, area in returned
+    }
+
+
+def fill_missing_apts(cur, apt_cache: dict[tuple, int], keys: list[tuple]) -> None:
+    """캐시에 빠진 단지를 단건 조회로 메운다.
+
+    on conflict do update는 입력 행마다 하나씩 되돌려주므로 여기 걸릴 것이 없어야
+    정상이다. 그래도 비워두면 그 단지의 거래가 통째로 버려지므로 안전망은 남긴다.
+    수가 많다면 왕복 비용이 그대로 돌아온 것이니 눈에 띄어야 한다.
+    """
+    missing = [key for key in keys if key not in apt_cache]
+    if not missing:
+        return
+    print(f"  [경고] 단지 {len(missing):,}개가 upsert 결과에 없어 단건 조회로 메웁니다")
+    for key in missing:
+        cur.execute(SELECT_APT, key)
+        res = cur.fetchone()
+        if res:
+            apt_cache[key] = res[0]
 
 
 def load_to_db(df: pd.DataFrame, conn) -> int:
@@ -182,66 +217,45 @@ def load_to_db(df: pd.DataFrame, conn) -> int:
     cur = conn.cursor()
 
     # 1단계: 고유 단지 일괄 upsert
-    print("  단지 upsert 중...")
     df["area_sqm"] = df["area_sqm"].round(2)
     unique_apts = df.drop_duplicates(subset=["name", "gu", "dong", "area_sqm"])
+    print(f"  단지 upsert 중... (고유 단지 {len(unique_apts):,}개)")
     apt_rows = [
-        (row["name"], row["sido"], row["gu"], row["dong"],
-         row["address"], float(row["area_sqm"]),
-         int(row["year_built"]) if pd.notna(row["year_built"]) else None)
-        for _, row in unique_apts.iterrows()
+        (name, sido, gu, dong, address, float(area),
+         int(year) if pd.notna(year) else None)
+        for name, sido, gu, dong, address, area, year in zip(
+            unique_apts["name"], unique_apts["sido"], unique_apts["gu"],
+            unique_apts["dong"], unique_apts["address"],
+            unique_apts["area_sqm"], unique_apts["year_built"],
+        )
     ]
-    psycopg2.extras.execute_values(
-        cur,
-        """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
-           values %s
-           on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
-           returning id, name, gu, dong, area_sqm""",
-        apt_rows, page_size=200,
+    apt_cache = upsert_apts(cur, conn, apt_rows)
+    fill_missing_apts(
+        cur, apt_cache,
+        [(r[0], r[2], r[3], r[5]) for r in apt_rows],  # (name, gu, dong, area_sqm)
     )
-    returned = cur.fetchall()
-    conn.commit()
 
-    # 2단계: ID 캐시 구성
-    apt_cache: dict[tuple, int] = {}
-    for r in returned:
-        apt_id, name, gu, dong, area = r
-        apt_cache[(name, gu, dong, float(area))] = apt_id
-
-    missing_keys = [
-        (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
-        for _, row in unique_apts.iterrows()
-        if (row["name"], row["gu"], row["dong"], float(row["area_sqm"])) not in apt_cache
+    # 2단계: 거래 일괄 insert
+    # iterrows()는 행마다 Series를 만들어 느리다. 큰 지역은 수십만 행이라
+    # 컬럼을 통째로 zip해서 튜플만 뽑는다.
+    tx_rows = [
+        (apt_id, contract_date, int(price), floor, deal)
+        for apt_id, contract_date, price, floor, deal in zip(
+            (apt_cache.get(key) for key in zip(
+                df["name"], df["gu"], df["dong"], df["area_sqm"].astype(float))),
+            df["contract_date"], df["price_man"], df["floor"], df["deal_type"],
+        )
+        if apt_id
     ]
-    for key in missing_keys:
-        cur.execute(SELECT_APT, key)
-        res = cur.fetchone()
-        if res:
-            apt_cache[key] = res[0]
+    dropped = len(df) - len(tx_rows)
+    if dropped:
+        print(f"  [경고] 단지를 못 찾아 건너뛴 거래 {dropped:,}건")
 
-    # 3단계: 거래 일괄 insert
-    print("  거래 insert 중...")
+    print(f"  거래 insert 중... ({len(tx_rows):,}건)")
     inserted = 0
-    tx_rows = []
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
-        key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
-        apt_id = apt_cache.get(key)
-        if not apt_id:
-            continue
-        tx_rows.append((
-            apt_id,
-            row["contract_date"],
-            int(row["price_man"]),
-            row["floor"],
-            row["deal_type"],
-        ))
-        if len(tx_rows) >= 1000:
-            inserted += copy_transactions(cur, tx_rows)
-            tx_rows.clear()
-            conn.commit()
-
-    if tx_rows:
-        inserted += copy_transactions(cur, tx_rows)
+    chunks = range(0, len(tx_rows), TX_COMMIT_ROWS)
+    for i in tqdm(chunks, desc="  batches", leave=False):
+        inserted += copy_transactions(cur, tx_rows[i:i + TX_COMMIT_ROWS])
         conn.commit()
 
     cur.close()

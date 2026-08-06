@@ -125,16 +125,18 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── DB 적재 ─────────────────────────────────────────────────
 
-UPSERT_APT = """
-insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
-values (%s, %s, %s, %s, %s, %s, %s)
-on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
-returning id;
-"""
-
+# 단지 upsert/거래 insert의 SQL은 각 함수 안에 인라인으로 있다.
+# 이 조회만 캐시에 빠진 단지를 메우는 안전망으로 따로 쓴다.
 SELECT_APT = """
 select id from apts where name=%s and gu=%s and dong=%s and area_sqm=%s;
 """
+
+# 한 statement에 묶는 행수. 왕복 횟수를 줄이는 값이라 클수록 좋지만,
+# 쿼리 문자열이 그만큼 커진다.
+APT_PAGE_SIZE = 500
+TX_PAGE_SIZE  = 1000
+# 커밋 간격. 커밋도 왕복 한 번이라 행마다 하면 그 비용이 그대로 쌓인다.
+TX_COMMIT_ROWS = 10_000
 
 
 def insert_rent_transactions(cur, rows: list[tuple]) -> int:
@@ -147,7 +149,7 @@ def insert_rent_transactions(cur, rows: list[tuple]) -> int:
            on conflict (apt_id, contract_date, deposit_man, monthly_man, floor, deal_type) do nothing
            returning id""",
         rows,
-        page_size=500,
+        page_size=TX_PAGE_SIZE,
         fetch=True,
     )
     return len(inserted)
@@ -158,73 +160,82 @@ def load_to_db(df: pd.DataFrame, conn) -> int:
     cur = conn.cursor()
 
     # 1단계: 고유 단지 목록 추출 후 일괄 upsert
-    print("  단지 upsert 중...", flush=True)
     df["area_sqm"] = df["area_sqm"].round(2)
     unique_apts = df.drop_duplicates(subset=["name", "gu", "dong", "area_sqm"])
-    print(f"  고유 단지 수: {len(unique_apts):,}", flush=True)
+    print(f"  단지 upsert 중... (고유 단지 {len(unique_apts):,}개)", flush=True)
     apt_rows = [
-        (row["name"], row["sido"], row["gu"], row["dong"],
-         row["address"], float(row["area_sqm"]),
-         int(row["year_built"]) if pd.notna(row["year_built"]) else None)
-        for _, row in unique_apts.iterrows()
-    ]
-    # 500개씩 나눠서 upsert (대용량 배치 방지)
-    apt_cache: dict[tuple, int] = {}
-    BATCH = 500
-    for i in range(0, len(apt_rows), BATCH):
-        batch = apt_rows[i:i+BATCH]
-        print(f"  단지 배치 {i//BATCH+1}/{(len(apt_rows)-1)//BATCH+1} ...", flush=True)
-        psycopg2.extras.execute_values(
-            cur,
-            """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
-               values %s
-               on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
-               returning id, name, gu, dong, area_sqm""",
-            batch, page_size=500,
+        (name, sido, gu, dong, address, float(area),
+         int(year) if pd.notna(year) else None)
+        for name, sido, gu, dong, address, area, year in zip(
+            unique_apts["name"], unique_apts["sido"], unique_apts["gu"],
+            unique_apts["dong"], unique_apts["address"],
+            unique_apts["area_sqm"], unique_apts["year_built"],
         )
-        for row in cur.fetchall():
-            apt_id, name, gu, dong, area = row
-            apt_cache[(name, gu, dong, float(area))] = apt_id
-        conn.commit()
-    # 캐시에 없는 항목은 DB에서 조회
-    missing_keys = [
-        (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
-        for _, row in unique_apts.iterrows()
-        if (row["name"], row["gu"], row["dong"], float(row["area_sqm"])) not in apt_cache
     ]
-    if missing_keys:
-        for key in missing_keys:
+
+    # fetch=True로 모든 페이지의 RETURNING을 모은다. 예전에는 배치 크기와 page_size를
+    # 똑같이 500으로 맞춰 두고 배치마다 cur.fetchall()을 불러 결과를 챙겼는데,
+    # 둘이 같아야만 맞는 코드였다. page_size를 건드리면 조용히 깨진다
+    # (execute_values는 페이지마다 execute해서 앞 결과를 덮어쓴다).
+    returned = psycopg2.extras.execute_values(
+        cur,
+        """insert into apts (name, sido, gu, dong, address, area_sqm, year_built)
+           values %s
+           on conflict (name, gu, dong, area_sqm) do update set name=excluded.name
+           returning id, name, gu, dong, area_sqm""",
+        apt_rows, page_size=APT_PAGE_SIZE, fetch=True,
+    )
+    conn.commit()
+    apt_cache = {
+        (name, gu, dong, float(area)): apt_id
+        for apt_id, name, gu, dong, area in returned
+    }
+
+    # on conflict do update는 입력 행마다 하나씩 되돌려주므로 여기 걸릴 것이 없어야
+    # 정상이다. 그래도 비워두면 그 단지의 거래가 통째로 버려지므로 안전망은 남긴다.
+    missing = [
+        (r[0], r[2], r[3], r[5]) for r in apt_rows
+        if (r[0], r[2], r[3], r[5]) not in apt_cache
+    ]
+    if missing:
+        print(f"  [경고] 단지 {len(missing):,}개가 upsert 결과에 없어 단건 조회로 메웁니다")
+        for key in missing:
             cur.execute(SELECT_APT, key)
             res = cur.fetchone()
             if res:
                 apt_cache[key] = res[0]
 
-    # 3단계: 거래 일괄 insert
-    print("  거래 insert 중...", flush=True)
-    inserted = 0
-    tx_rows = []
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="  rows", leave=False):
-        key = (row["name"], row["gu"], row["dong"], float(row["area_sqm"]))
-        apt_id = apt_cache.get(key)
-        if not apt_id:
-            continue
-        tx_rows.append((
-            apt_id,
-            row["contract_date"],
-            int(row["deposit_man"]),
-            int(row["monthly_man"]),
-            row["deal_type"],
-            row["contract_type"] if pd.notna(row.get("contract_type", pd.NA)) else None,
-            row["floor"],
-            row["contract_period"] if pd.notna(row.get("contract_period", pd.NA)) else None,
-        ))
-        if len(tx_rows) >= 1000:
-            inserted += insert_rent_transactions(cur, tx_rows)
-            tx_rows.clear()
-            conn.commit()
+    # 2단계: 거래 일괄 insert
+    # iterrows()는 행마다 Series를 만들어 느리다. 큰 지역은 수십만 행이라
+    # 컬럼을 통째로 zip해서 튜플만 뽑는다.
+    def optional(col: str) -> list:
+        """CSV에 없을 수도 있는 컬럼. 빈 값은 None으로 눕힌다."""
+        if col not in df.columns:
+            return [None] * len(df)
+        return [v if pd.notna(v) else None for v in df[col]]
 
-    if tx_rows:
-        inserted += insert_rent_transactions(cur, tx_rows)
+    tx_rows = [
+        (apt_id, contract_date, int(deposit), int(monthly),
+         deal, contract_type, floor, period)
+        for apt_id, contract_date, deposit, monthly, deal, contract_type, floor, period
+        in zip(
+            (apt_cache.get(key) for key in zip(
+                df["name"], df["gu"], df["dong"], df["area_sqm"].astype(float))),
+            df["contract_date"], df["deposit_man"], df["monthly_man"],
+            df["deal_type"], optional("contract_type"),
+            df["floor"], optional("contract_period"),
+        )
+        if apt_id
+    ]
+    dropped = len(df) - len(tx_rows)
+    if dropped:
+        print(f"  [경고] 단지를 못 찾아 건너뛴 거래 {dropped:,}건")
+
+    print(f"  거래 insert 중... ({len(tx_rows):,}건)", flush=True)
+    inserted = 0
+    chunks = range(0, len(tx_rows), TX_COMMIT_ROWS)
+    for i in tqdm(chunks, desc="  batches", leave=False):
+        inserted += insert_rent_transactions(cur, tx_rows[i:i + TX_COMMIT_ROWS])
         conn.commit()
 
     cur.close()
