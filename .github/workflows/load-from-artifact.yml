@@ -1,0 +1,96 @@
+name: 수집된 CSV 적재 (artifact)
+
+# 다시 내려받지 않고, 앞선 수집 실행이 남긴 collected-csv artifact로 적재만 돌린다.
+#
+# 쓰는 경우:
+#   * 국토부 사이트가 막혀 재수집이 안 될 때 (심야 시간대, 연속 조회 후 차단 등)
+#   * 다운로드는 멀쩡했는데 적재만 실패했거나, 적재 코드를 고쳐 다시 넣고 싶을 때
+#
+# auto-collect가 적재 전에 artifact를 올려두므로, 적재가 중간에 죽어도
+# 그 회차에 받은 CSV 32개는 온전히 남아 있다 (retention-days: 14).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CSV를 가져올 수집 실행 ID (Actions URL 끝 숫자)'
+        required: true
+        type: string
+      type:
+        description: '적재 유형'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, buy, rent]
+
+# 같은 DB에 두 적재가 동시에 들어가지 않도록 수집 워크플로와 그룹을 공유한다.
+# 수집이 돌고 있으면 끝날 때까지 기다린다.
+concurrency:
+  group: auto-collect
+  cancel-in-progress: false
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    permissions:
+      contents: read
+      actions: read   # 다른 실행의 artifact를 읽으려면 필요하다
+
+    env:
+      LOAD_TYPE: ${{ github.event.inputs.type }}
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      # 적재에는 Playwright가 필요 없으므로 requirements 전체 대신 필요한 것만 설치한다.
+      - name: 의존성 설치
+        run: pip install pandas psycopg2-binary python-dotenv tqdm
+
+      # auto-collect는 `path: data/updates/**/*.csv`로 올린다. upload-artifact는
+      # 매칭된 경로들의 공통 조상을 뿌리로 잡으므로 artifact 안은 buy/·rent/ 두 폴더다.
+      # 따라서 data/updates에 풀면 원래 경로가 그대로 복원된다.
+      - name: CSV artifact 내려받기
+        uses: actions/download-artifact@v4
+        with:
+          name: collected-csv
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: data/updates
+
+      - name: 내려받은 CSV 확인
+        run: |
+          {
+            echo "### 적재 대상 (수집 실행 ${{ github.event.inputs.run_id }})"
+            echo '```'
+            du -sh data/updates/buy data/updates/rent 2>/dev/null || true
+            echo "CSV 파일 수: $(find data/updates -name '*.csv' | wc -l)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # 빈 artifact를 적재 성공으로 착각하지 않도록 여기서 끊는다.
+          if [ -z "$(find data/updates -name '*.csv' -print -quit)" ]; then
+            echo "artifact에 CSV가 없습니다 — run_id를 확인하세요"
+            exit 1
+          fi
+
+      # 매매 실패가 전월세 적재를 막지 않도록 조건을 명시한다 (auto-collect와 같은 이유).
+      # --keep-csv: 원본은 artifact에 있고 러너는 어차피 폐기되므로 지울 이유가 없다.
+      # 남겨두면 적재 후 요약에서 무엇을 넣었는지 그대로 확인할 수 있다.
+      - name: Supabase 적재 (매매)
+        if: ${{ !cancelled() && env.LOAD_TYPE != 'rent' }}
+        run: python scripts/load_csv.py --dir ./data/updates/buy --keep-csv
+
+      - name: Supabase 적재 (전월세)
+        if: ${{ !cancelled() && env.LOAD_TYPE != 'buy' }}
+        run: python scripts/load_rent_csv.py --dir ./data/updates/rent --keep-csv
