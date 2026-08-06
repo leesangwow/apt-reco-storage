@@ -78,7 +78,10 @@ export async function GET() {
     COLLECTED_REGIONS.map(region => {
       const download = latest(dealType, region.key, 'download');
       const load     = latest(dealType, region.key, 'load');
-      const stat     = statRows.find(s => s.deal_type === dealType && s.sido === region.sido);
+      // 한 수집 지역이 sido 여러 개에 걸칠 수 있다 (regions-admin.ts 주석 참고).
+      const stats = statRows.filter(
+        s => s.deal_type === dealType && region.sidos.includes(s.sido),
+      );
 
       // 두 단계를 따로 내보낸다. 예전에는 여기서 적재 시각이 없으면 다운로드
       // 시각으로 대신하고(load?.finished_at ?? download?.finished_at) 그 값 하나로
@@ -90,7 +93,7 @@ export async function GET() {
 
       return {
         regionKey:  region.key,
-        sido:       region.sido,
+        sido:       region.label,
         dealType,
         downloadStatus: stageStatus(download),
         loadStatus:     stageStatus(load),
@@ -103,14 +106,27 @@ export async function GET() {
         fileBytes:  download?.file_bytes ?? null,
         error:      download?.error ?? load?.error ?? null,
         runUrl:     download?.run_url ?? load?.run_url ?? null,
-        txCount:            stat?.tx_count ?? 0,
-        latestContractDate: stat?.latest_contract_date ?? null,
+        txCount: stats.reduce((sum, s) => sum + Number(s.tx_count ?? 0), 0),
+        // 날짜는 'YYYY-MM-DD' 고정 폭이라 문자열 비교로 최댓값을 고를 수 있다.
+        latestContractDate:
+          stats.map(s => s.latest_contract_date)
+               .filter(Boolean)
+               .sort()
+               .reverse()[0] ?? null,
       };
     }),
   );
 
+  // 어느 지역도 가져가지 않은 sido. 이런 행은 화면에서 조용히 사라지고,
+  // 그 지역은 적재가 멀쩡한데도 총 건수가 0으로 보인다. 그래서 드러내 둔다.
+  const claimed = new Set(COLLECTED_REGIONS.flatMap(r => r.sidos));
+  const unmatchedSidos = [
+    ...new Set(statRows.filter(s => !claimed.has(s.sido)).map(s => s.sido)),
+  ].sort();
+
   return NextResponse.json({
     rows,
+    unmatchedSidos,
     generatedAt: new Date().toISOString(),
     hasHistory: runRows.length > 0,
   });

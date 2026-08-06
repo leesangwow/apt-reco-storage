@@ -82,6 +82,7 @@ const TONE: Record<Health['tone'], string> = {
 export default function AdminContent() {
   const router = useRouter();
   const [rows, setRows] = useState<Row[] | null>(null);
+  const [unmatched, setUnmatched] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<string | null>(null);
 
@@ -93,7 +94,11 @@ export default function AdminContent() {
         if (!res.ok) throw new Error(body.error ?? '불러오지 못했습니다');
         return body;
       })
-      .then(body => body && setRows(body.rows))
+      .then(body => {
+        if (!body) return;
+        setRows(body.rows);
+        setUnmatched(body.unmatchedSidos ?? []);
+      })
       .catch(e => setError(e.message));
   }, [router]);
 
@@ -132,6 +137,14 @@ export default function AdminContent() {
           </div>
         ))}
       </div>
+
+      {unmatched.length > 0 && (
+        <div className="rounded-lg bg-[#FDF3D8] text-[#8A6100] text-[13px] p-4 mb-6">
+          아래 시도의 거래가 어느 수집 지역에도 잡히지 않아 표의 총 건수에서 빠져 있습니다.
+          <code className="font-mono"> {unmatched.join(', ')} </code>
+          — lib/regions-admin.ts의 sidos에 추가해야 합니다.
+        </div>
+      )}
 
       <div className="rounded-xl border border-[#E6E6DE] overflow-x-auto">
         <table className="w-full min-w-[720px] text-[13px]">
