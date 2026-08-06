@@ -4,12 +4,17 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { DEAL_LABEL, type DealType } from '@/lib/regions-admin';
 
+/** 단계별 최신 기록의 상태. 'none'은 기록 자체가 없다는 뜻이다. */
+type Stage = 'success' | 'failed' | 'none';
+
 interface Row {
   regionKey: string;
   sido: string;
   dealType: DealType;
-  status: 'success' | 'failed' | 'unknown';
-  lastRunAt: string | null;
+  downloadStatus: Stage;
+  loadStatus: Stage;
+  downloadAt: string | null;
+  loadAt: string | null;
   durationMs: number | null;
   attempts: number;
   rowsTotal: number | null;
@@ -25,7 +30,7 @@ interface Row {
 const STALE_MS = 4 * 24 * 60 * 60 * 1000;
 
 function ago(iso: string | null): string {
-  if (!iso) return '기록 없음';
+  if (!iso) return '—';
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins}분 전`;
@@ -40,10 +45,28 @@ function mmdd(iso: string | null): string {
 
 type Health = { label: string; tone: 'ok' | 'warn' | 'bad' };
 
+/** 두 단계 중 마지막으로 움직인 시각. 적재가 옛 회차 것일 수 있어 단순 우선순위로는 못 고른다. */
+function latestAt(r: Row): string | null {
+  const stamps = [r.downloadAt, r.loadAt].filter(Boolean) as string[];
+  if (!stamps.length) return null;
+  return stamps.reduce((a, b) => (new Date(a) >= new Date(b) ? a : b));
+}
+
 function health(r: Row): Health {
-  if (r.status === 'failed') return { label: '실패', tone: 'bad' };
-  if (r.status === 'unknown') return { label: '기록 없음', tone: 'warn' };
-  if (r.lastRunAt && Date.now() - new Date(r.lastRunAt).getTime() > STALE_MS) {
+  // 어느 단계가 깨졌는지까지 알려준다. 원인이 다르면 손댈 곳도 다르다.
+  if (r.downloadStatus === 'failed') return { label: '다운로드 실패', tone: 'bad' };
+  if (r.loadStatus === 'failed')     return { label: '적재 실패',     tone: 'bad' };
+  if (r.downloadStatus === 'none' && r.loadStatus === 'none') {
+    return { label: '기록 없음', tone: 'warn' };
+  }
+  // CSV는 받았는데 그걸 넣은 적재 기록이 없거나, 적재가 그 CSV보다 오래됐다.
+  // 화면에 보이는 거래 데이터는 아직 이번 회차분이 아니라는 뜻이다.
+  if (r.loadStatus === 'none') return { label: '적재 없음', tone: 'warn' };
+  if (r.downloadAt && r.loadAt && new Date(r.loadAt) < new Date(r.downloadAt)) {
+    return { label: '적재 대기', tone: 'warn' };
+  }
+  const last = latestAt(r);
+  if (last && Date.now() - new Date(last).getTime() > STALE_MS) {
     return { label: '지연', tone: 'warn' };
   }
   if (r.rowsNew === 0) return { label: '신규 0건', tone: 'warn' };
@@ -85,7 +108,7 @@ export default function AdminContent() {
   const worst = rows.some(r => health(r).tone === 'bad') ? '실패 있음'
               : rows.some(r => health(r).tone === 'warn') ? '주의'
               : '정상';
-  const lastRun = rows.map(r => r.lastRunAt).filter(Boolean).sort().reverse()[0] ?? null;
+  const lastRun = rows.map(latestAt).filter(Boolean).sort().reverse()[0] ?? null;
   const totalTx = rows.reduce((s, r) => s + r.txCount, 0);
 
   return (
@@ -111,13 +134,14 @@ export default function AdminContent() {
       </div>
 
       <div className="rounded-xl border border-[#E6E6DE] overflow-x-auto">
-        <table className="w-full min-w-[640px] text-[13px]">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="text-left text-[#8A8A82]">
               <th className="font-normal px-4 py-3">지역</th>
               <th className="font-normal py-3">유형</th>
               <th className="font-normal py-3">상태</th>
-              <th className="font-normal py-3">마지막 적재</th>
+              <th className="font-normal py-3">다운로드</th>
+              <th className="font-normal py-3">적재</th>
               <th className="font-normal py-3">최신 계약일</th>
               <th className="font-normal py-3 text-right">신규</th>
               <th className="font-normal px-4 py-3 text-right">총 건수</th>
@@ -166,7 +190,8 @@ export default function AdminContent() {
                       {h.label}
                     </span>
                   </td>
-                  <td className="py-3 text-[#8A8A82]">{ago(r.lastRunAt)}</td>
+                  <td className="py-3 text-[#8A8A82]">{ago(r.downloadAt)}</td>
+                  <td className="py-3 text-[#8A8A82]">{ago(r.loadAt)}</td>
                   <td className="py-3 text-[#8A8A82]">{mmdd(r.latestContractDate)}</td>
                   <td className="py-3 text-right">
                     {r.rowsNew === null ? '—' : `+${r.rowsNew.toLocaleString()}`}
@@ -183,6 +208,9 @@ export default function AdminContent() {
 
       <p className="mt-4 text-[12px] text-[#8A8A82]">
         수집은 매주 월·목 오전 10시에 자동 실행됩니다. 실패한 행을 누르면 원인과 실행 로그가 열립니다.
+        <br />
+        다운로드는 CSV를 받는 단계, 적재는 그 CSV를 DB에 넣는 단계입니다. 둘 다 끝나야 &lsquo;정상&rsquo;이며,
+        화면의 최신 계약일·총 건수는 적재가 끝나야 움직입니다.
       </p>
     </>
   );

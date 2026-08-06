@@ -80,15 +80,22 @@ export async function GET() {
       const load     = latest(dealType, region.key, 'load');
       const stat     = statRows.find(s => s.deal_type === dealType && s.sido === region.sido);
 
-      const failed = download?.status === 'failed' || load?.status === 'failed';
-      const lastRun = load?.finished_at ?? download?.finished_at ?? null;
+      // 두 단계를 따로 내보낸다. 예전에는 여기서 적재 시각이 없으면 다운로드
+      // 시각으로 대신하고(load?.finished_at ?? download?.finished_at) 그 값 하나로
+      // 상태를 정했다. 그래서 CSV만 받아두고 적재가 통째로 빠진 회차가 화면에는
+      // "정상 · 방금 적재됨"으로 보였다 (2026-08-06 낮 실행에서 실제로 겪었다).
+      // 판정은 클라이언트 health()가 두 단계를 다 보고 내린다.
+      const stageStatus = (r?: RunRow) =>
+        r ? (r.status === 'failed' ? 'failed' : 'success') : 'none';
 
       return {
         regionKey:  region.key,
         sido:       region.sido,
         dealType,
-        status:     failed ? 'failed' : lastRun ? 'success' : 'unknown',
-        lastRunAt:  lastRun,
+        downloadStatus: stageStatus(download),
+        loadStatus:     stageStatus(load),
+        downloadAt:     download?.finished_at ?? null,
+        loadAt:         load?.finished_at ?? null,
         durationMs: (download?.duration_ms ?? 0) + (load?.duration_ms ?? 0) || null,
         attempts:   download?.attempts ?? 1,
         rowsTotal:  load?.rows_total ?? null,
