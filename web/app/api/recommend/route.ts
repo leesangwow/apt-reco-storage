@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { NEIGHBORS } from '@/lib/regions';
 
-const COLS = 'id, name, sido, gu, dong, pyeong, area_sqm, avg_price, year_built, hh, deal_count, latest_date, oldest_date, freshness, latest_price, latest_floor, latest_contract_date';
+const COLS = 'id, name, sido, gu, dong, pyeong, area_sqm, avg_price, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_price, latest_floor, latest_contract_date';
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -13,6 +13,8 @@ export async function GET(req: NextRequest) {
   const page            = Number(p.get('page')     ?? '0');
   const band            = p.get('band')            ?? '5%';
   const freshnessFilter = p.get('freshnessFilter');
+  // 연간 최소 거래건수. freshness(최신성)와 별개 축이라 따로 받는다.
+  const minAnnual       = Number(p.get('minAnnual') ?? '0');
   const regionId        = p.get('regionId');
 
   // 가격대 탐색 모드
@@ -21,7 +23,7 @@ export async function GET(req: NextRequest) {
   const sidoParam  = p.get('sido') ?? '';
   const guParam    = p.get('gu')   ?? '';
 
-  let base: { id: number; name: string; sido: string; gu: string; dong: string; pyeong: number; area_sqm: number; avg_price: number; year_built: number | null; hh: number | null; deal_count: number; latest_date: string; freshness: string; latest_price: number; latest_floor: number | null; latest_contract_date: string } | null = null;
+  let base: { id: number; name: string; sido: string; gu: string; dong: string; pyeong: number; area_sqm: number; avg_price: number; year_built: number | null; hh: number | null; deal_count: number; deal_count_12m: number; latest_date: string; freshness: string; latest_price: number; latest_floor: number | null; latest_contract_date: string } | null = null;
   let myPrice = priceParam;
 
   if (!priceMode) {
@@ -101,6 +103,9 @@ export async function GET(req: NextRequest) {
     query = query.in('freshness', ['fresh_high', 'fresh_mid']);
   }
 
+  // 연간 거래량 필터
+  if (minAnnual > 0) query = query.gte('deal_count_12m', minAnnual);
+
   const { data: rows, error: re } = await query.limit(500);
   if (re) return NextResponse.json({ error: re.message }, { status: 500 });
 
@@ -133,7 +138,8 @@ export async function GET(req: NextRequest) {
     area: Math.round(Number(r.area_sqm)),
     year: r.year_built, hh: r.hh,
     km: null, mins: null,
-    dealCount: r.deal_count, latestDate: r.latest_date, freshness: r.freshness,
+    dealCount: r.deal_count, annualDeals: r.deal_count_12m,
+    latestDate: r.latest_date, freshness: r.freshness,
     latestPrice: Number(r.latest_price),
     latestFloor: r.latest_floor,
     latestContractDate: r.latest_contract_date,
@@ -142,13 +148,13 @@ export async function GET(req: NextRequest) {
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
         pyeong: 0, area: 0, year: null, hh: null,
-        dealCount: 0, latestDate: '', freshness: 'fresh_high' as const,
+        dealCount: 0, annualDeals: 0, latestDate: '', freshness: 'fresh_high' as const,
         latestPrice: 0, latestFloor: null, latestContractDate: '',
         priceMode: true }
     : { id: base!.id, name: base!.name, sido: base!.sido, gu: base!.gu, dong: base!.dong,
         price: myPrice, pyeong: Math.round(Number(base!.pyeong)),
         area: Math.round(Number(base!.area_sqm)), year: base!.year_built, hh: base!.hh,
-        dealCount: base!.deal_count, latestDate: base!.latest_date, freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
+        dealCount: base!.deal_count, annualDeals: base!.deal_count_12m, latestDate: base!.latest_date, freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
         latestPrice: Number(base!.latest_price), latestFloor: base!.latest_floor, latestContractDate: base!.latest_contract_date,
         priceMode: false };
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { NEIGHBORS } from '@/lib/regions';
 
-const COLS = 'id, name, sido, gu, dong, pyeong, area_sqm, avg_deposit, year_built, hh, deal_count, latest_date, oldest_date, freshness, latest_deposit, latest_contract_date';
+const COLS = 'id, name, sido, gu, dong, pyeong, area_sqm, avg_deposit, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_deposit, latest_contract_date';
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -13,6 +13,8 @@ export async function GET(req: NextRequest) {
   const page            = Number(p.get('page')     ?? '0');
   const band            = p.get('band')            ?? '5%';
   const freshnessFilter = p.get('freshnessFilter');
+  // 연간 최소 거래건수. freshness(최신성)와 별개 축이라 따로 받는다.
+  const minAnnual       = Number(p.get('minAnnual') ?? '0');
   const regionId        = p.get('regionId');
 
   // 가격대 탐색 모드
@@ -91,6 +93,9 @@ export async function GET(req: NextRequest) {
     query = query.in('freshness', ['fresh_high', 'fresh_mid']);
   }
 
+  // 연간 거래량 필터
+  if (minAnnual > 0) query = query.gte('deal_count_12m', minAnnual);
+
   const { data: rows, error: re } = await query.limit(500);
   if (re) return NextResponse.json({ error: re.message }, { status: 500 });
 
@@ -124,6 +129,7 @@ export async function GET(req: NextRequest) {
     year: r.year_built, hh: r.hh,
     km: null, mins: null,
     dealCount: r.deal_count,
+    annualDeals: r.deal_count_12m,
     latestDate: r.latest_date,
     freshness: r.freshness,
     latestPrice: Number(r.latest_deposit),
@@ -134,14 +140,15 @@ export async function GET(req: NextRequest) {
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
         pyeong: 0, area: 0, year: null, hh: null,
-        dealCount: 0, latestDate: '', freshness: 'fresh_high' as const,
+        dealCount: 0, annualDeals: 0, latestDate: '', freshness: 'fresh_high' as const,
         latestPrice: 0, latestFloor: null, latestContractDate: '',
         priceMode: true }
     : { id: Number(base!.id), name: String(base!.name), sido: String(base!.sido),
         gu: String(base!.gu), dong: String(base!.dong), price: myPrice,
         pyeong: Math.round(Number(base!.pyeong)), area: Math.round(Number(base!.area_sqm)),
         year: base!.year_built as number | null, hh: base!.hh as number | null,
-        dealCount: base!.deal_count as number, latestDate: String(base!.latest_date),
+        dealCount: base!.deal_count as number, annualDeals: base!.deal_count_12m as number,
+        latestDate: String(base!.latest_date),
         freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
         latestPrice: Number(base!.latest_deposit), latestFloor: null,
         latestContractDate: String(base!.latest_contract_date), priceMode: false };

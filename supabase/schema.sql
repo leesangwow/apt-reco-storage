@@ -163,6 +163,23 @@ latest1 as (
     contract_date                          as latest_contract_date
   from recent
   where rn = 1
+),
+yearly as (
+  -- 연간 거래량. 위 recent가 rn <= 3으로 표본을 자르는 것과 달리 12개월치를 다 센다.
+  --
+  -- freshness는 "최근 3건이 얼마나 몰려 있나"만 재기 때문에 거래량 정보가 없다.
+  -- 연 50건인 단지와 연 3건 딱 채운 단지가 똑같이 fresh_high로 나온다.
+  -- 시세를 믿을 만한지 판단하려면 표본 크기 자체가 필요하다.
+  --
+  -- 신고 지연 주의: 계약 후 30일 이내 신고라 최근 한 달은 늘 덜 찬 상태로 잡힌다.
+  -- 그래도 창을 뒤로 미루지 않는다. 모든 단지가 똑같이 영향받아 단지 간 비교는
+  -- 왜곡되지 않고, 미루면 그만큼 최신성을 잃는다.
+  select
+    apt_id,
+    count(*) as deal_count_12m
+  from transactions
+  where contract_date >= current_date - interval '12 months'
+  group by apt_id
 )
 select
   a.id, a.name, a.sido, a.gu, a.dong, a.address,
@@ -179,10 +196,16 @@ select
     when l.deal_count >= 3 and l.oldest_date >= current_date - interval '3 months' then 'fresh_mid'   -- 연초록
     when l.deal_count >= 3                                                         then 'fresh_low'   -- 노랑
     else                                                                                'scarce'      -- 주황 (1~2건)
-  end as freshness
+  end as freshness,
+  -- 새 컬럼은 반드시 맨 뒤에 붙인다. create or replace view는 기존 컬럼의
+  -- 이름·순서를 바꾸지 못해서, 중간에 끼우면 운영 배포가 통째로 실패한다.
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
 from apts a
 join latest3 l  on l.apt_id  = a.id
-join latest1 l1 on l1.apt_id = a.id;
+join latest1 l1 on l1.apt_id = a.id
+-- 6개월 창이 12개월 안에 들어가므로 yearly는 항상 매칭된다. 그래도 left join으로
+-- 두는 이유는 위 창을 나중에 넓혔을 때 단지가 통째로 사라지지 않게 하려는 것이다.
+left join yearly y on y.apt_id = a.id;
 -- 6개월 내 거래 0건인 단지는 join에서 자동 제외 → 추천에 안 나옴
 
 -- ─── apt_rent_prices 뷰 (전월세) ────────────────────────────────────────────
@@ -219,6 +242,19 @@ latest1 as (
     contract_date                            as latest_contract_date
   from recent
   where rn = 1
+),
+yearly as (
+  -- 연간 거래량 (매매 쪽 yearly 주석 참고).
+  -- 전세·신규만 세는 이유는 이 뷰의 보증금 기준과 표본을 맞추기 위해서다.
+  -- 월세까지 합치면 "이 보증금 시세를 뒷받침하는 거래가 몇 건인가"가 아니게 된다.
+  select
+    apt_id,
+    count(*) as deal_count_12m
+  from rent_transactions
+  where deal_type      = '전세'
+    and contract_type  = '신규'
+    and contract_date >= current_date - interval '12 months'
+  group by apt_id
 )
 select
   a.id, a.name, a.sido, a.gu, a.dong, a.address,
@@ -234,7 +270,11 @@ select
     when l.deal_count >= 3 and l.oldest_date >= current_date - interval '3 months' then 'fresh_mid'
     when l.deal_count >= 3                                                         then 'fresh_low'
     else                                                                                'scarce'
-  end as freshness
+  end as freshness,
+  -- 새 컬럼은 반드시 맨 뒤에 붙인다. create or replace view는 기존 컬럼의
+  -- 이름·순서를 바꾸지 못해서, 중간에 끼우면 운영 배포가 통째로 실패한다.
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
 from apts a
 join latest3 l  on l.apt_id  = a.id
-join latest1 l1 on l1.apt_id = a.id;
+join latest1 l1 on l1.apt_id = a.id
+left join yearly y on y.apt_id = a.id;

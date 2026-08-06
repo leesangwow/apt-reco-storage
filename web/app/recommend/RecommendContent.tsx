@@ -16,7 +16,7 @@ const THUMB_COLORS = ['#F2B705', '#6AB7A8', '#E8855B', '#9C8AD6', '#7FA6E0'];
 interface BaseApt {
   id: number; name: string; sido: string; gu: string; dong: string;
   price: number; pyeong: number; area: number; year: number | null; hh: number | null;
-  dealCount: number; latestDate: string; freshness: Freshness;
+  dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
   priceMode?: boolean;
 }
@@ -26,7 +26,7 @@ interface RecItem {
   id: number; name: string; sido: string; gu: string; dong: string;
   price: number; pyeong: number; area: number; year: number | null; hh: number | null;
   km: number | null; mins: string | null;
-  dealCount: number; latestDate: string; freshness: Freshness;
+  dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
 }
 
@@ -36,6 +36,29 @@ const FRESHNESS_CONFIG: Record<Freshness, { label: string; color: string; bg: st
   fresh_low:  { label: '3건 · 6개월↓', color: '#B07D00', bg: '#FFF8DC' }, // 노랑
   scarce:     { label: '',              color: '#E8552D', bg: '#FBEAE2' }, // 주황 (건수 동적)
 };
+
+/**
+ * 연간 거래량 뱃지. 최신성(freshness)과 다른 축이라 나란히 붙는다.
+ *
+ * 구간으로 뭉개지 않고 숫자를 그대로 보여준다. "많음/보통"으로 바꾸면 사용자가
+ * 판단할 정보를 잃는다 — "연 24건"은 월 2건이라는 뜻이고 그 자체로 읽힌다.
+ * 색은 표본이 얼마나 두터운지만 옅게 구분한다.
+ */
+function annualTone(n: number): { color: string; bg: string } {
+  if (n >= 24) return { color: '#0A6E8A', bg: '#E2F0F5' };  // 월 2건 이상
+  if (n >= 12) return { color: '#3A7A96', bg: '#EDF5F8' };  // 월 1건 이상
+  return { color: '#8A8A82', bg: '#F4F4F0' };
+}
+
+function AnnualBadge({ n }: { n: number }) {
+  const t = annualTone(n);
+  return (
+    <span className="text-[10px] font-bold px-[6px] py-[2px] rounded-[5px] whitespace-nowrap flex-none"
+      style={{ color: t.color, background: t.bg }}>
+      연 {n.toLocaleString()}건
+    </span>
+  );
+}
 
 interface ApiResult { base: BaseApt; total: number; items: RecItem[]; }
 
@@ -60,6 +83,8 @@ export default function RecommendContent() {
   const [band, setBand] = useState('5%');
   // null=전체, 'fresh_high'=1개월3건, 'fresh_mid_up'=3개월3건이상
   const [freshnessFilter, setFreshnessFilter] = useState<null | 'fresh_high' | 'fresh_mid_up'>(null);
+  // 연간 최소 거래건수. 0=전체. 최신성과 다른 축이라 freshnessFilter와 함께 걸 수 있다.
+  const [minAnnual, setMinAnnual] = useState(0);
   const [addedRegions, setAddedRegions] = useState<AddedRegion[]>([]);
   const [regionId, setRegionId] = useState<string | null>(null);
 
@@ -104,6 +129,7 @@ export default function RecommendContent() {
         page: String(page),
         band,
         ...(freshnessFilter ? { freshnessFilter } : {}),
+        ...(minAnnual ? { minAnnual: String(minAnnual) } : {}),
         ...(regionId ? { regionId } : {}),
       });
       const endpoint = dealMode === 'rent' ? '/api/rent' : '/api/recommend';
@@ -120,7 +146,7 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId, dealMode]);
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, minAnnual, regionId, dealMode]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -305,6 +331,7 @@ export default function RecommendContent() {
                           style={{ color: f.color, background: f.bg }}>{label}</span>
                       );
                     })()}
+                    {my.annualDeals > 0 && <AnnualBadge n={my.annualDeals} />}
                   </div>
                 </div>
                 <div className="text-right flex-none">
@@ -358,6 +385,25 @@ export default function RecommendContent() {
                 className={`flex items-center gap-[5px] flex-none border cursor-pointer text-[12px] font-bold px-[12px] py-[6px] rounded-[10px] transition-all ${on ? 'bg-[#1A1A1A] text-white border-transparent' : 'border-[#EAEAE4] bg-white text-[#76766E]'}`}
               >
                 <span className="w-[6px] h-[6px] rounded-full flex-none" style={{ background: on ? 'white' : opt.dot }} />
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 연간 거래량 filter — 최신성과 다른 축이라 신뢰도 칩과 함께 걸 수 있다 */}
+        <div className="flex gap-[6px] px-[18px] pb-[10px] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden items-center">
+          <span className="text-[11px] text-[#A0A098] font-bold flex-none">거래량</span>
+          {([
+            { key: 0,  label: '전체' },
+            { key: 12, label: '연 12건↑' },
+            { key: 24, label: '연 24건↑' },
+          ] as const).map(opt => {
+            const on = minAnnual === opt.key;
+            return (
+              <button key={opt.key} onClick={() => { setMinAnnual(opt.key); setPage(0); }}
+                className={`flex-none border cursor-pointer text-[12px] px-[12px] py-[6px] rounded-[10px] whitespace-nowrap transition-all ${on ? 'bg-[#1A1A1A] text-white font-extrabold border-transparent' : 'border-[#EAEAE4] bg-white text-[#80807A] font-semibold'}`}
+              >
                 {opt.label}
               </button>
             );
@@ -483,6 +529,7 @@ export default function RecommendContent() {
                       </span>
                     );
                   })()}
+                  {r.annualDeals > 0 && <AnnualBadge n={r.annualDeals} />}
                   </div>
                 </div>
               </div>
