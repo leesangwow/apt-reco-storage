@@ -145,3 +145,8 @@ join latest3 l  on l.apt_id  = a.id
 join latest1 l1 on l1.apt_id = a.id
 left join yearly y on y.apt_id = a.id;
 
+
+-- Supabase의 REST 계층(PostgREST)은 스키마를 캐시한다. 위에서 뷰에 컬럼을 추가해도
+-- 캐시가 갱신되기 전까지 API는 계속 "column apt_prices.deal_count_12m does not exist"로
+-- 실패한다. 뷰만 바꾸고 이 줄을 빼먹으면 고친 것처럼 보이는데 화면은 그대로 빈다.
+notify pgrst, 'reload schema';
