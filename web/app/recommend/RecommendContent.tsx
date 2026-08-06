@@ -60,7 +60,7 @@ function AnnualBadge({ n }: { n: number }) {
   );
 }
 
-interface ApiResult { base: BaseApt; total: number; items: RecItem[]; }
+interface ApiResult { base: BaseApt; total: number; items: RecItem[]; sameComplex?: RecItem[]; }
 
 export default function RecommendContent() {
   const searchParams = useSearchParams();
@@ -345,6 +345,36 @@ export default function RecommendContent() {
             ) : null}
           </div>
         </div>
+
+        {/* 같은 단지 다른 평형 — 추천 목록과 성격이 달라 따로 둔다.
+            본 목록은 "비슷한 값의 다른 단지"고, 여기는 "같은 단지 안에서의 선택지"다.
+            가격대가 크게 벌어져 본 목록의 가격 band에는 애초에 안 걸린다. */}
+        {(data?.sameComplex?.length ?? 0) > 0 && my && !my.priceMode && (
+          <div className="px-[18px] pb-[12px]">
+            <div className="text-[11px] text-[#A0A098] font-bold mb-[6px]">같은 단지 다른 평형</div>
+            <div className="flex gap-[8px] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {data!.sameComplex!.map(o => {
+                const diff = o.price - my.price;
+                return (
+                  <button key={o.id} onClick={() => handlePickPyeong(o.id)}
+                    className="flex-none text-left border border-[#EAEAE4] bg-white rounded-[12px] px-[13px] py-[10px] cursor-pointer hover:border-[#D2D2CA] transition-colors"
+                  >
+                    <div className="text-[13px] font-extrabold text-[#191919] whitespace-nowrap">
+                      {o.pyeong}평 · {won(o.price)}
+                    </div>
+                    <div className="flex items-center gap-[5px] mt-[3px]">
+                      <span className="text-[11px] font-bold whitespace-nowrap"
+                        style={{ color: diff > 0 ? '#C8452A' : diff < 0 ? '#2A6BC8' : '#8A8A82' }}>
+                        {diff === 0 ? '동일' : `${diff > 0 ? '+' : '−'}${won(diff)}`}
+                      </span>
+                      {o.annualDeals > 0 && <AnnualBadge n={o.annualDeals} />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Scope chips */}
         <div className="flex gap-[8px] px-[18px] pb-[10px] pt-[2px] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

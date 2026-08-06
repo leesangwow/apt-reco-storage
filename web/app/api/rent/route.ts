@@ -45,7 +45,6 @@ export async function GET(req: NextRequest) {
     .gte('avg_deposit', myPrice - PRICE_BAND)
     .lte('avg_deposit', myPrice + PRICE_BAND);
 
-  if (base) query = query.neq('name', String(base.name));
 
   // 범위 기준값
   const refSido = priceMode ? sidoParam : String(base!.sido);
@@ -91,12 +90,31 @@ export async function GET(req: NextRequest) {
     query = query.in('freshness', ['fresh_high', 'fresh_mid']);
   }
 
-  const { data: rows, error: re } = await query.limit(500);
+  // 같은 단지의 다른 평형. 59㎡와 84㎡는 보증금이 크게 벌어져 본 목록의 가격 band에
+  // 안 걸리므로 band 없이 따로 받는다. 기준 단지가 없는 가격대 탐색 모드에서는 건너뛴다.
+  const sameComplexQuery = base
+    ? supabase
+        .from('apt_rent_prices')
+        .select(COLS)
+        .eq('name', String(base.name))
+        .eq('gu', String(base.gu))
+        .eq('dong', String(base.dong))
+        .neq('id', Number(base.id))
+        .order('area_sqm')
+    : null;
+
+  const [{ data: rows, error: re }, sameRes] = await Promise.all([
+    query.limit(500),
+    sameComplexQuery ?? Promise.resolve({ data: [], error: null }),
+  ]);
   if (re) return NextResponse.json({ error: re.message }, { status: 500 });
 
   // 단지당 1개 (기준가와 가장 가까운 평형)
   const complexMap = new Map<string, typeof rows[0]>();
   for (const r of (rows ?? [])) {
+    // 기준 단지 본인만 뺀다. 이름만 비교하면 다른 구·동의 동명 단지까지 사라진다
+    // (현대·주공·e편한세상처럼 흔한 이름은 전국에 널려 있다).
+    if (base && r.name === base.name && r.gu === base.gu && r.dong === base.dong) continue;
     const key = `${r.name}||${r.gu}||${r.dong}`;
     const cur = complexMap.get(key);
     if (!cur || Math.abs(Number(r.avg_deposit) - myPrice) < Math.abs(Number(cur.avg_deposit) - myPrice)) {
@@ -149,8 +167,22 @@ export async function GET(req: NextRequest) {
         latestPrice: Number(base!.latest_deposit), latestFloor: null,
         latestContractDate: String(base!.latest_contract_date), priceMode: false };
 
+  const sameComplex = (sameRes.data ?? []).map(r => ({
+    id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
+    price: Number(r.avg_deposit),
+    pyeong: Math.round(Number(r.pyeong)),
+    area: Math.round(Number(r.area_sqm)),
+    year: r.year_built, hh: r.hh,
+    km: null, mins: null,
+    dealCount: r.deal_count, annualDeals: r.deal_count_12m,
+    latestDate: r.latest_date, freshness: r.freshness,
+    latestPrice: Number(r.latest_deposit),
+    latestFloor: null,
+    latestContractDate: r.latest_contract_date,
+  }));
+
   return NextResponse.json({
     base: basePayload,
-    total, items,
+    total, items, sameComplex,
   });
 }
