@@ -14,6 +14,18 @@ create table if not exists apts (
   address    text,
   area_sqm   numeric(6,2) not null,
   pyeong     numeric(5,1) generated always as (round(area_sqm / 3.3058, 1)) stored,
+  -- 통칭 평형. 사람들이 "34평"이라 부르는 그 숫자다.
+  -- 국토부 자료의 area_sqm은 전용면적이라 그대로 나누면 84㎡가 25.4평으로 나온다.
+  -- 통상 전용률(전용/공급) 0.75로 되돌려야 실제로 쓰는 평형이 된다.
+  --   전용 84.97㎡ / (3.3058 * 0.75) = 34.3 → 34평
+  pyeong_supply smallint generated always as (round(area_sqm / (3.3058 * 0.75))::smallint) stored,
+  -- 평형 구간. 아래 "평형 구간" 주석 참고. 20평 이상은 4평, 미만은 2평 단위.
+  size_tier smallint generated always as (
+    case when round(area_sqm / (3.3058 * 0.75)) >= 20
+         then ((round(area_sqm / (3.3058 * 0.75))::int / 4) * 4)::smallint
+         else ((round(area_sqm / (3.3058 * 0.75))::int / 2) * 2)::smallint
+    end
+  ) stored,
   year_built int,
   hh         int,
   lat        numeric(10,7),
@@ -21,6 +33,20 @@ create table if not exists apts (
   created_at timestamptz default now(),
   unique (name, gu, dong, area_sqm)
 );
+
+-- create table if not exists는 이미 있는 테이블에 컬럼을 더해주지 않는다.
+-- 위 정의를 나중에 추가한 컬럼은 여기서 한 번 더 붙여야 기존 DB에도 반영된다.
+-- 두 컬럼을 한 문장에 넣어야 테이블 재작성이 한 번으로 끝난다.
+alter table apts
+  add column if not exists pyeong_supply smallint
+    generated always as (round(area_sqm / (3.3058 * 0.75))::smallint) stored,
+  add column if not exists size_tier smallint
+    generated always as (
+      case when round(area_sqm / (3.3058 * 0.75)) >= 20
+           then ((round(area_sqm / (3.3058 * 0.75))::int / 4) * 4)::smallint
+           else ((round(area_sqm / (3.3058 * 0.75))::int / 2) * 2)::smallint
+      end
+    ) stored;
 
 -- ─── 매매 실거래 ────────────────────────────────────────────────────────────
 create table if not exists transactions (
@@ -73,6 +99,19 @@ create index if not exists idx_rent_transactions_apt_id       on rent_transactio
 create index if not exists idx_rent_transactions_contract_date on rent_transactions(contract_date desc);
 create index if not exists idx_apts_gu   on apts(gu);
 create index if not exists idx_apts_dong on apts(dong);
+
+-- apt_rent_prices의 LATERAL들이 전부 "이 단지의 전세·신규 계약을 최신순으로"를 묻는다.
+-- 유니크 인덱스로는 apt_id·contract_date까지만 좁혀지고 deal_type·contract_type은 힙에서
+-- 걸러야 해서, 월세·갱신까지 다 읽고 버리게 된다. 조건을 인덱스에 박아 그 낭비를 없앤다.
+-- (운영과 같은 규모로 만든 데이터에서 전월세 조회 390ms → 33ms)
+create index if not exists idx_rent_tx_jeonse
+  on rent_transactions (apt_id, contract_date desc, id desc) include (deposit_man)
+  where deal_type = '전세' and contract_type = '신규';
+
+-- 평형 구간 조회용. 뷰가 행마다 "같은 단지·같은 구간의 다른 면적들"을 찾는 데 쓴다.
+-- include로 pyeong_supply·id를 얹어 힙까지 안 가고 인덱스만 읽고 끝낸다.
+create index if not exists idx_apts_complex_tier
+  on apts (name, gu, dong, size_tier) include (pyeong_supply, id);
 
 -- ─── 수집·적재 이력 ─────────────────────────────────────────────────────────
 -- 관리자 페이지(/admin)가 읽는 실행 기록. 지역·유형·단계별로 한 행씩 남는다.
@@ -144,6 +183,32 @@ create or replace view region_data_stats as
 -- 정렬에 `, t.id desc` 동률 처리를 넣었다. 예전 row_number()는 같은 계약일이
 -- 여러 건이면 임의로 골라서 실행할 때마다 값이 달라질 수 있었다.
 
+-- ─── 평형 구간 (size_tier) ──────────────────────────────────────────────────
+-- apts의 키가 (단지명, 구, 동, 전용면적)이라 같은 평형이 84.28·84.74·84.97처럼
+-- 여러 행으로 쪼개진다. 운영 데이터에서 해밀마을1단지 34평은 14개 행, 자연앤힐스테이트는
+-- 13개 행이었다. 그만큼 거래량이 나뉘어 어느 행을 봐도 그 평형의 진짜 거래량이 안 보인다.
+--
+-- 묶는 규칙: 통칭 평형(pyeong_supply)을 20평 이상은 4평, 미만은 2평 단위로 자른다.
+--   32~35평 = 전용 78.1~88.0㎡  ← 국민평형(84㎡)이 통째로 들어온다
+--   size_tier가 구간 식별자이자 구간의 시작 평이다.
+--   20평 경계에서 값이 겹치지 않는다 (19평 → 18, 20평 → 20).
+--
+-- 왜 고정 구간인가: 처음엔 "이웃 면적과 간격이 벌어지면 끊기"를 검토했으나 운영
+-- 데이터에서 연쇄가 폭주했다. 해운대 아이파크는 45개 면적이 80.57~139.44㎡에 평균
+-- 1.34㎡ 간격으로 깔려 있어 전부 한 덩어리가 됐다. 고정 구간은 그 폭주가 원천적으로 없다.
+--
+-- 왜 경계를 ㎡가 아니라 평으로 잡았나: ㎡ 어림수(80·92)로 자르면 32평(78.1~80.6㎡)처럼
+-- 한 평이 두 구간에 걸쳐, 79.99와 80.00이 다른 구간으로 간다. 평 단위면 걸침이 없다.
+--
+-- 20평 미만을 2평으로 좁힌 이유: 4평 구간을 그대로 내리면 4~7평이 전용 9.9~19.8㎡로
+-- 폭이 100%가 된다. 실제로 센트럴S타운은 30개 면적이 12.07~16.43㎡에 있어 한 덩어리가 된다.
+--
+-- ⚠ 평당가에는 이 구간을 쓰면 안 된다. 32~35평 구간은 전용 78.1~88.0㎡로 12.7% 벌어져
+--   있어, 구간 평균가를 구간 대표 평형으로 나누면 값이 왜곡된다. 평당가는 행별 area_sqm으로.
+--
+-- 뷰는 행 구조를 그대로 둔다 (면적당 한 행). 구간 정보를 컬럼으로 얹기만 하고,
+-- 실제로 묶어서 보여줄지는 앱이 정한다. 통계·평형별 분석은 종전대로 area_sqm을 쓰면 된다.
+
 -- ─── apt_prices 뷰 (매매) ───────────────────────────────────────────────────
 -- 최근 6개월 내 최신 3건 평균 + 신선도. 금액 단위는 '억'(만원 / 10000).
 --
@@ -170,7 +235,16 @@ select
     when l.deal_count >= 3                                                         then 'fresh_low'   -- 노랑
     else                                                                                'scarce'      -- 주황 (1~2건)
   end as freshness,
-  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m,
+  -- ── 평형 구간 (위 주석 참고). 새 컬럼은 반드시 맨 뒤에 붙인다 —
+  --    create or replace view는 기존 컬럼의 이름·순서를 바꾸지 못한다 ──
+  a.pyeong_supply,
+  a.size_tier,
+  -- 라벨은 그 단지·구간에 실제로 있는 평형에서 뽑는다. 구간 이름(32~35평)을 그대로 쓰면
+  -- 34평만 있는 단지도 32~35평으로 보여 실제보다 넓게 느껴진다.
+  case when g.lo_py = g.hi_py then g.lo_py || '평'
+       else g.lo_py || '~' || g.hi_py || '평' end as size_label,
+  coalesce(g.tier_deal_count_12m, 0)::int         as tier_deal_count_12m
 from apts a
 -- 최신 3건 집계
 cross join lateral (
@@ -203,7 +277,26 @@ left join lateral (
     from transactions t
    where t.apt_id = a.id
      and t.contract_date >= current_date - interval '12 months'
-) y on true;
+) y on true
+-- 같은 단지·같은 구간의 다른 면적들을 모아 라벨과 구간 거래량을 만든다.
+-- 라벨과 거래량을 한 LATERAL에 합쳐 apts 인덱스를 두 번 타지 않게 했다.
+-- 가격대 필터가 위 l에서 이미 걸린 뒤라 살아남은 행에 대해서만 돈다. 게다가
+-- 같은 단지·구간이면 결과가 같아 Postgres가 Memoize로 재사용한다
+-- (운영과 같은 규모로 만든 데이터에서 1,050행 → 실제 조회 268회).
+cross join lateral (
+  select min(s.pyeong_supply) as lo_py,
+         max(s.pyeong_supply) as hi_py,
+         sum(c.n)             as tier_deal_count_12m
+    from apts s
+    cross join lateral (
+      select count(*) as n
+        from transactions t
+       where t.apt_id = s.id
+         and t.contract_date >= current_date - interval '12 months'
+    ) c
+   where s.name = a.name and s.gu = a.gu and s.dong = a.dong
+     and s.size_tier = a.size_tier
+) g;
 -- 6개월 내 거래 0건인 단지는 위 latest1 LATERAL에서 행이 사라진다 → 추천에 안 나옴
 
 -- ─── apt_rent_prices 뷰 (전월세) ────────────────────────────────────────────
@@ -226,7 +319,13 @@ select
     when l.deal_count >= 3                                                         then 'fresh_low'
     else                                                                                'scarce'
   end as freshness,
-  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m,
+  -- 평형 구간. 매매 뷰와 같은 규칙, 거래량만 전세·신규 기준이다.
+  a.pyeong_supply,
+  a.size_tier,
+  case when g.lo_py = g.hi_py then g.lo_py || '평'
+       else g.lo_py || '~' || g.hi_py || '평' end as size_label,
+  coalesce(g.tier_deal_count_12m, 0)::int         as tier_deal_count_12m
 from apts a
 cross join lateral (
   select round(avg(r.deposit_man) / 10000.0, 2) as avg_deposit,
@@ -260,4 +359,20 @@ left join lateral (
      and t.deal_type     = '전세'
      and t.contract_type = '신규'
      and t.contract_date >= current_date - interval '12 months'
-) y on true;
+) y on true
+cross join lateral (
+  select min(s.pyeong_supply) as lo_py,
+         max(s.pyeong_supply) as hi_py,
+         sum(c.n)             as tier_deal_count_12m
+    from apts s
+    cross join lateral (
+      select count(*) as n
+        from rent_transactions t
+       where t.apt_id = s.id
+         and t.deal_type     = '전세'
+         and t.contract_type = '신규'
+         and t.contract_date >= current_date - interval '12 months'
+    ) c
+   where s.name = a.name and s.gu = a.gu and s.dong = a.dong
+     and s.size_tier = a.size_tier
+) g;
