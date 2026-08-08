@@ -1,8 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { NEIGHBORS } from '@/lib/regions';
+import { dedupeByTier } from '@/lib/tier';
 
-const COLS = 'id, name, sido, gu, dong, pyeong, area_sqm, avg_price, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_price, latest_floor, latest_contract_date';
+const COLS = 'id, name, sido, gu, dong, pyeong, pyeong_supply, area_sqm, avg_price, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_price, latest_floor, latest_contract_date, size_tier, size_label, tier_deal_count_12m';
+
+// 화면에 내보내는 한 건. 평형 표시와 거래량은 평형 구간 기준이다
+// (전용 84㎡ → 통칭 34평, 거래량은 쪼개진 면적들을 합친 값).
+type Row = Record<string, any>;
+const toItem = (r: Row) => ({
+  id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
+  price: Number(r.avg_price),
+  pyeong: r.pyeong_supply,
+  area: Math.round(Number(r.area_sqm)),
+  sizeTier: r.size_tier, sizeLabel: r.size_label,
+  year: r.year_built, hh: r.hh,
+  km: null, mins: null,
+  dealCount: r.deal_count, annualDeals: r.tier_deal_count_12m,
+  latestDate: r.latest_date, freshness: r.freshness,
+  latestPrice: Number(r.latest_price),
+  latestFloor: r.latest_floor,
+  latestContractDate: r.latest_contract_date,
+});
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -21,7 +40,7 @@ export async function GET(req: NextRequest) {
   const sidoParam  = p.get('sido') ?? '';
   const guParam    = p.get('gu')   ?? '';
 
-  let base: { id: number; name: string; sido: string; gu: string; dong: string; pyeong: number; area_sqm: number; avg_price: number; year_built: number | null; hh: number | null; deal_count: number; deal_count_12m: number; latest_date: string; freshness: string; latest_price: number; latest_floor: number | null; latest_contract_date: string } | null = null;
+  let base: { id: number; name: string; sido: string; gu: string; dong: string; pyeong: number; pyeong_supply: number; area_sqm: number; avg_price: number; year_built: number | null; hh: number | null; deal_count: number; deal_count_12m: number; latest_date: string; freshness: string; latest_price: number; latest_floor: number | null; latest_contract_date: string; size_tier: number; size_label: string; tier_deal_count_12m: number } | null = null;
   let myPrice = priceParam;
 
   if (!priceMode) {
@@ -102,12 +121,15 @@ export async function GET(req: NextRequest) {
 
   // 같은 단지의 다른 평형. 59㎡와 84㎡는 가격이 크게 벌어져 본 목록의 가격 band에
   // 안 걸리므로 band 없이 따로 받는다. 기준 단지가 없는 가격대 탐색 모드에서는 건너뛴다.
+  //
+  // 기준 단지의 행 하나(neq id)만 빼면 안 된다. 같은 34평이 84.40·84.74·84.97로
+  // 쪼개져 있으면 나머지 13개가 "다른 평형"으로 올라온다. 구간째로 빼야 한다.
   const sameComplexQuery = base
     ? supabase
         .from('apt_prices')
         .select(COLS)
         .eq('name', base.name).eq('gu', base.gu).eq('dong', base.dong)
-        .neq('id', base.id)
+        .neq('size_tier', base.size_tier)
         .order('area_sqm')
     : null;
 
@@ -137,52 +159,27 @@ export async function GET(req: NextRequest) {
     else if (sort === 'price') v = Number(a.avg_price) - Number(b.avg_price);
     else if (sort === 'area')  v = Number(a.pyeong) - Number(b.pyeong);
     else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
-    else if (sort === 'deals') v = Number(a.deal_count_12m ?? 0) - Number(b.deal_count_12m ?? 0);
+    // 거래량은 구간 합계로 비교한다. 행별 값은 같은 평형이 쪼개진 만큼 나뉘어 있어
+    // 파편이 많은 단지일수록 거래가 적어 보인다.
+    else if (sort === 'deals') v = Number(a.tier_deal_count_12m ?? 0) - Number(b.tier_deal_count_12m ?? 0);
     else                       v = Math.abs(Number(a.avg_price) - myPrice) - Math.abs(Number(b.avg_price) - myPrice);
     return asc ? v : -v;
   });
 
   const total = sorted.length;
-  const items = sorted.slice(0, (page + 1) * 3).map(r => ({
-    id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
-    price: Number(r.avg_price),
-    pyeong: Math.round(Number(r.pyeong)),
-    area: Math.round(Number(r.area_sqm)),
-    year: r.year_built, hh: r.hh,
-    km: null, mins: null,
-    dealCount: r.deal_count, annualDeals: r.deal_count_12m,
-    latestDate: r.latest_date, freshness: r.freshness,
-    latestPrice: Number(r.latest_price),
-    latestFloor: r.latest_floor,
-    latestContractDate: r.latest_contract_date,
-  }));
+  const items = sorted.slice(0, (page + 1) * 3).map(toItem);
 
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
-        pyeong: 0, area: 0, year: null, hh: null,
+        pyeong: 0, area: 0, sizeTier: 0, sizeLabel: '', year: null, hh: null,
         dealCount: 0, annualDeals: 0, latestDate: '', freshness: 'fresh_high' as const,
         latestPrice: 0, latestFloor: null, latestContractDate: '',
         priceMode: true }
-    : { id: base!.id, name: base!.name, sido: base!.sido, gu: base!.gu, dong: base!.dong,
-        price: myPrice, pyeong: Math.round(Number(base!.pyeong)),
-        area: Math.round(Number(base!.area_sqm)), year: base!.year_built, hh: base!.hh,
-        dealCount: base!.deal_count, annualDeals: base!.deal_count_12m, latestDate: base!.latest_date, freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
-        latestPrice: Number(base!.latest_price), latestFloor: base!.latest_floor, latestContractDate: base!.latest_contract_date,
+    : { ...toItem(base!), price: myPrice,
+        freshness: base!.freshness as 'fresh_high'|'fresh_mid'|'fresh_low'|'scarce',
         priceMode: false };
 
-  const sameComplex = (sameRes.data ?? []).map(r => ({
-      id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
-      price: Number(r.avg_price),
-      pyeong: Math.round(Number(r.pyeong)),
-      area: Math.round(Number(r.area_sqm)),
-      year: r.year_built, hh: r.hh,
-      km: null, mins: null,
-      dealCount: r.deal_count, annualDeals: r.deal_count_12m,
-      latestDate: r.latest_date, freshness: r.freshness,
-      latestPrice: Number(r.latest_price),
-      latestFloor: r.latest_floor,
-      latestContractDate: r.latest_contract_date,
-  }));
+  const sameComplex = dedupeByTier(sameRes.data ?? []).map(toItem);
 
   return NextResponse.json({ base: basePayload, total, items, sameComplex });
 }

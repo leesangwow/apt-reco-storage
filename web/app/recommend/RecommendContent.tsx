@@ -15,7 +15,10 @@ const THUMB_COLORS = ['#F2B705', '#6AB7A8', '#E8855B', '#9C8AD6', '#7FA6E0'];
 
 interface BaseApt {
   id: number; name: string; sido: string; gu: string; dong: string;
-  price: number; pyeong: number; area: number; year: number | null; hh: number | null;
+  // pyeong은 통칭 평형(전용 84㎡ → 34평), sizeLabel은 그 평형 구간에 실제로 있는
+  // 평형 범위("34평" 또는 "32~35평"). area는 전용면적 그대로다.
+  price: number; pyeong: number; area: number; sizeTier: number; sizeLabel: string;
+  year: number | null; hh: number | null;
   dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
   priceMode?: boolean;
@@ -24,7 +27,8 @@ type Freshness = 'fresh_high' | 'fresh_mid' | 'fresh_low' | 'scarce';
 
 interface RecItem {
   id: number; name: string; sido: string; gu: string; dong: string;
-  price: number; pyeong: number; area: number; year: number | null; hh: number | null;
+  price: number; pyeong: number; area: number; sizeTier: number; sizeLabel: string;
+  year: number | null; hh: number | null;
   km: number | null; mins: string | null;
   dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
@@ -96,7 +100,9 @@ export default function RecommendContent() {
   const [q, setQ] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{
     name: string; sido: string; gu: string; dong: string; year_built: number | null; hh: number | null;
-    variants: { aptId: number; pyeong: number; area: number; price: number }[];
+    // 평형 구간마다 한 개. 같은 34평이 전용면적 파편으로 여러 번 나오지 않는다.
+    variants: { aptId: number; pyeong: number; area: number; price: number;
+                label: string; annualDeals: number; dealCount: number }[];
   }>>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedAptId, setSelectedAptId] = useState<number | null>(null);
@@ -293,7 +299,7 @@ export default function RecommendContent() {
                     {lastBaseRef.current?.name ?? '—'}
                   </div>
                   <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">
-                    {lastBaseRef.current ? `${lastBaseRef.current.gu} ${lastBaseRef.current.dong} · ${lastBaseRef.current.pyeong}평` : ''}
+                    {lastBaseRef.current ? `${lastBaseRef.current.gu} ${lastBaseRef.current.dong} · ${lastBaseRef.current.sizeLabel}` : ''}
                   </div>
                 </div>
                 <div className="text-right flex-none">
@@ -320,7 +326,7 @@ export default function RecommendContent() {
                     <button onClick={showToast} className="border-none cursor-pointer text-[12px] leading-none px-[5px] py-[2px] bg-[#F4F4F0] text-[#ADADA4] rounded-[5px] hover:bg-[#EAEAE4] transition-colors flex-none">›</button>
                   </div>
                   <div className="flex items-center gap-[6px] mt-[3px]">
-                    <span className="text-[12.5px] text-[#8A8A82]">{my.gu} {my.dong} · {my.pyeong}평 · {my.year ?? '-'}년</span>
+                    <span className="text-[12.5px] text-[#8A8A82]">{my.gu} {my.dong} · {my.sizeLabel} · {my.year ?? '-'}년</span>
                     {my.freshness && (() => {
                       const f = FRESHNESS_CONFIG[my.freshness];
                       const label = my.freshness === 'scarce' ? `${my.dealCount}건 · 6개월↓` : f.label;
@@ -360,7 +366,7 @@ export default function RecommendContent() {
                     className="flex-none text-left border border-[#EAEAE4] bg-white rounded-[12px] px-[13px] py-[10px] cursor-pointer hover:border-[#D2D2CA] transition-colors"
                   >
                     <div className="text-[13px] font-extrabold text-[#191919] whitespace-nowrap">
-                      {o.pyeong}평 · {won(o.price)}
+                      {o.sizeLabel} · {won(o.price)}
                     </div>
                     <div className="flex items-center gap-[5px] mt-[3px]">
                       <span className="text-[11px] font-bold whitespace-nowrap"
@@ -524,7 +530,7 @@ export default function RecommendContent() {
                   </div>
                   <div className="flex items-center justify-between">
                   <span className="text-[11px] text-[#ADADA4]">
-                    {r.pyeong}평({r.area}㎡) · {r.year ?? '-'}년 · {r.hh ? r.hh.toLocaleString() + '세대' : '-'}
+                    {r.sizeLabel}({r.area}㎡) · {r.year ?? '-'}년 · {r.hh ? r.hh.toLocaleString() + '세대' : '-'}
                   </span>
                   {(() => {
                     const f = FRESHNESS_CONFIG[r.freshness];
@@ -655,8 +661,11 @@ export default function RecommendContent() {
                       <button key={v.aptId} onClick={() => handlePickPyeong(v.aptId)}
                         className="flex items-center justify-between border border-[#EDEDE7] bg-white rounded-[14px] px-[16px] py-[14px] cursor-pointer w-full hover:border-[#FFD400] hover:bg-[#FFFBE6] transition-colors">
                         <div className="text-left">
-                          <div className="text-[15px] font-extrabold text-[#191919]">{v.pyeong}평</div>
-                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">{v.area}㎡</div>
+                          <div className="flex items-center gap-[6px]">
+                            <span className="text-[15px] font-extrabold text-[#191919]">{v.label}</span>
+                            {v.annualDeals > 0 && <AnnualBadge n={v.annualDeals} />}
+                          </div>
+                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">전용 {v.area}㎡</div>
                         </div>
                         <span className="text-[16px] font-extrabold text-[#191919]">{won(v.price)}</span>
                       </button>
@@ -687,7 +696,7 @@ export default function RecommendContent() {
                               {c.sido.replace('특별시','').replace('광역시','').replace('특별자치시','').replace('특별자치도','').replace('도','').replace('시','')}
                             </span>
                           </div>
-                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">{c.gu} {c.dong} · {c.variants.map(v => `${v.pyeong}평`).join('/')}</div>
+                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">{c.gu} {c.dong} · {c.variants.map(v => v.label).join('/')}</div>
                         </div>
                         <span className="text-[12px] text-[#9A9A92] whitespace-nowrap">평형 선택 ›</span>
                       </button>
