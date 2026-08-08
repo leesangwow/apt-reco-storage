@@ -5,6 +5,11 @@ import { dedupeByTier } from '@/lib/tier';
 
 const COLS = 'id, name, sido, gu, dong, pyeong, pyeong_supply, area_sqm, avg_deposit, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_deposit, latest_contract_date, size_tier, size_label, tier_deal_count_12m';
 
+// 화면에 보여줄 단지 수 상한. 사용자가 100곳 넘게 훑어보는 일은 없다.
+const MAX_COMPLEXES = 100;
+// DB에서 받아올 행 수. 같은 단지의 여러 평형이 하나로 접히므로 상한보다 넉넉히 받는다.
+const FETCH_ROWS = 500;
+
 // 화면에 내보내는 한 건. 평형 표시와 거래량은 평형 구간 기준이다
 // (전용 84㎡ → 통칭 34평, 거래량은 쪼개진 면적들을 합친 값).
 type Row = Record<string, any>;
@@ -29,6 +34,8 @@ export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
   const aptId           = Number(p.get('aptId'));
   const scope           = p.get('scope')           ?? 'gu';
+  const sort            = p.get('sort')            ?? 'diff';
+  const dir             = p.get('dir')             ?? 'asc';
   const band            = p.get('band')            ?? '5%';
   const freshnessFilter = p.get('freshnessFilter');
   const regionId        = p.get('regionId');
@@ -44,7 +51,7 @@ export async function GET(req: NextRequest) {
 
   if (!priceMode) {
     const { data, error: be } = await supabase
-      .from('apt_rent_prices')
+      .from('apt_rent_prices_mv')
       .select(COLS)
       .eq('id', aptId)
       .single();
@@ -57,56 +64,60 @@ export async function GET(req: NextRequest) {
                    : band === '10%' ? myPrice * 0.1
                    : Number(band);
 
-  let query = supabase
-    .from('apt_rent_prices')
-    .select(COLS)
-    .gte('avg_deposit', myPrice - PRICE_BAND)
-    .lte('avg_deposit', myPrice + PRICE_BAND);
-
-
   // 범위 기준값
   const refSido = priceMode ? sidoParam : String(base!.sido);
   const refGu   = priceMode ? guParam   : String(base!.gu);
   const refDong = priceMode ? ''        : String(base!.dong);
   const sidoOnly = priceMode && !refGu;
 
-  // 범위 필터
-  if (regionId) {
-    if (regionId.includes('/')) {
-      const [sido, gu] = regionId.split('/');
-      query = query.eq('sido', sido).eq('gu', gu);
-    } else {
-      query = query.eq('sido', regionId);
-    }
-  } else {
-    switch (scope) {
-      case 'dong':
-        if (sidoOnly) query = query.eq('sido', refSido);
-        else if (priceMode) query = query.eq('sido', refSido).eq('gu', refGu);
-        else query = query.eq('sido', refSido).eq('gu', refGu).eq('dong', refDong);
-        break;
-      case 'gu':
-        query = (sidoOnly || !refGu)
-          ? query.eq('sido', refSido)
-          : query.eq('sido', refSido).eq('gu', refGu);
-        break;
-      case 'all':
-        query = query.eq('sido', refSido);
-        break;
-      case 'neighbors':
-        const neighborSidos = NEIGHBORS[refSido] ?? [];
-        query = neighborSidos.length > 0
-          ? query.in('sido', neighborSidos)
-          : query.eq('sido', refSido);
-        break;
-    }
-  }
+  // 쿼리 빌드. 보증금차순은 기준가 아래·위를 따로 받아야 해서 두 번 만든다.
+  const buildQuery = () => {
+    let query = supabase
+      .from('apt_rent_prices_mv')
+      .select(COLS)
+      .gte('avg_deposit', myPrice - PRICE_BAND)
+      .lte('avg_deposit', myPrice + PRICE_BAND);
 
-  if (freshnessFilter === 'fresh_high') {
-    query = query.eq('freshness', 'fresh_high');
-  } else if (freshnessFilter === 'fresh_mid_up') {
-    query = query.in('freshness', ['fresh_high', 'fresh_mid']);
-  }
+    // 범위 필터
+    if (regionId) {
+      if (regionId.includes('/')) {
+        const [sido, gu] = regionId.split('/');
+        query = query.eq('sido', sido).eq('gu', gu);
+      } else {
+        query = query.eq('sido', regionId);
+      }
+    } else {
+      switch (scope) {
+        case 'dong':
+          if (sidoOnly) query = query.eq('sido', refSido);
+          else if (priceMode) query = query.eq('sido', refSido).eq('gu', refGu);
+          else query = query.eq('sido', refSido).eq('gu', refGu).eq('dong', refDong);
+          break;
+        case 'gu':
+          query = (sidoOnly || !refGu)
+            ? query.eq('sido', refSido)
+            : query.eq('sido', refSido).eq('gu', refGu);
+          break;
+        case 'all':
+          query = query.eq('sido', refSido);
+          break;
+        case 'neighbors':
+          const neighborSidos = NEIGHBORS[refSido] ?? [];
+          query = neighborSidos.length > 0
+            ? query.in('sido', neighborSidos)
+            : query.eq('sido', refSido);
+          break;
+      }
+    }
+
+    if (freshnessFilter === 'fresh_high') {
+      query = query.eq('freshness', 'fresh_high');
+    } else if (freshnessFilter === 'fresh_mid_up') {
+      query = query.in('freshness', ['fresh_high', 'fresh_mid']);
+    }
+
+    return query;
+  };
 
   // 같은 단지의 다른 평형. 59㎡와 84㎡는 보증금이 크게 벌어져 본 목록의 가격 band에
   // 안 걸리므로 band 없이 따로 받는다. 기준 단지가 없는 가격대 탐색 모드에서는 건너뛴다.
@@ -115,7 +126,7 @@ export async function GET(req: NextRequest) {
   // 쪼개져 있으면 나머지 13개가 "다른 평형"으로 올라온다. 구간째로 빼야 한다.
   const sameComplexQuery = base
     ? supabase
-        .from('apt_rent_prices')
+        .from('apt_rent_prices_mv')
         .select(COLS)
         .eq('name', String(base.name))
         .eq('gu', String(base.gu))
@@ -124,11 +135,35 @@ export async function GET(req: NextRequest) {
         .order('area_sqm')
     : null;
 
-  const [{ data: rows, error: re }, sameRes] = await Promise.all([
-    query.limit(500),
+  // 정렬을 DB에 맡긴다. 예전에는 정렬 없이 500행을 받아 서버에서 줄을 세웠는데,
+  // 조건에 맞는 곳이 500을 넘으면(운영 실측: 수도권 6.5억 ±10%에서 3,698곳)
+  // 어느 500곳이 오는지 정해지지 않아 1위가 진짜 1위가 아닐 수 있었다.
+  // matview 덕분에 order by가 인덱스로 처리돼 정확한 상위 N을 그대로 받는다.
+  const asc = dir === 'asc';
+  const ORDER_COL: Record<string, string> = {
+    price: 'avg_deposit', area: 'area_sqm', year: 'year_built', deals: 'tier_deal_count_12m',
+  };
+
+  // 가격차순만 정렬 키가 abs(avg_deposit - 기준가)라 컬럼 하나로 표현이 안 된다.
+  // 기준가 아래에서 가까운 순, 위에서 가까운 순을 따로 받아 합치면 결과는 같다
+  // (가장 가까운 N곳은 반드시 이 두 묶음 안에 있다).
+  const listQueries = ORDER_COL[sort]
+    ? [buildQuery().order(ORDER_COL[sort], { ascending: asc, nullsFirst: false }).limit(FETCH_ROWS)]
+    : [
+        buildQuery().lte('avg_deposit', myPrice).order('avg_deposit', { ascending: false }).limit(FETCH_ROWS),
+        buildQuery().gt('avg_deposit',  myPrice).order('avg_deposit', { ascending: true  }).limit(FETCH_ROWS),
+      ];
+
+  const [sameRes, ...listRes] = await Promise.all([
     sameComplexQuery ?? Promise.resolve({ data: [], error: null }),
+    ...listQueries,
   ]);
-  if (re) return NextResponse.json({ error: re.message }, { status: 500 });
+  const listErr = listRes.find(r => r.error)?.error;
+  if (listErr) return NextResponse.json({ error: listErr.message }, { status: 500 });
+  const rows = listRes.flatMap(r => r.data ?? []);
+
+  // DB가 상한만큼 꽉 채워 보냈다면 뒤에 더 있다는 뜻이다.
+  const truncated = listRes.some(r => (r.data?.length ?? 0) >= FETCH_ROWS);
 
   // 단지당 1개 (기준가와 가장 가까운 평형)
   const complexMap = new Map<string, typeof rows[0]>();
@@ -147,7 +182,20 @@ export async function GET(req: NextRequest) {
   // 추천 3곳을 더 얻으려고 이 요청 전체(단지 500곳 뷰 계산 + 왕복 2번)를 다시 치러야 한다.
   // 정렬 키는 전부 아래 payload에 실려 있어 다시 조회할 이유가 없다.
   // 순서는 추린 그대로 둔다 — 미리 정렬해 보내면 동점 항목 순서가 달라진다.
-  const items = Array.from(complexMap.values()).map(toItem);
+  // DB가 정렬해 줬지만 여기서 한 번 더 줄을 세운다. 가격차순은 두 묶음을 합친
+  // 결과라 순서가 섞여 있고, 나머지도 이렇게 두면 화면 순서가 항상 이 기준과 같다.
+  const sorted = Array.from(complexMap.values()).sort((a, b) => {
+    let v = 0;
+    if      (sort === 'price') v = Number(a.avg_deposit) - Number(b.avg_deposit);
+    else if (sort === 'area')  v = Number(a.area_sqm) - Number(b.area_sqm);
+    else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
+    else if (sort === 'deals') v = Number(a.tier_deal_count_12m ?? 0) - Number(b.tier_deal_count_12m ?? 0);
+    else                       v = Math.abs(Number(a.avg_deposit) - myPrice) - Math.abs(Number(b.avg_deposit) - myPrice);
+    return asc ? v : -v;
+  });
+
+  // 100곳을 넘겨 봐야 아무도 안 본다. 더보기는 이 안에서 브라우저가 처리한다.
+  const items = sorted.slice(0, MAX_COMPLEXES).map(toItem);
 
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
@@ -163,6 +211,6 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     base: basePayload,
-    total: items.length, items, sameComplex,
+    total: items.length, truncated: truncated || sorted.length > MAX_COMPLEXES, items, sameComplex,
   });
 }

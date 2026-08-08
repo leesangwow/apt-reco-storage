@@ -94,3 +94,11 @@ jobs:
       - name: Supabase 적재 (전월세)
         if: ${{ !cancelled() && env.LOAD_TYPE != 'buy' }}
         run: python scripts/load_rent_csv.py --dir ./data/updates/rent --keep-csv
+
+      # ── 마지막: 조회용 matview 갱신 ─────────────────────────────
+      # 이걸 안 하면 DB에는 들어갔는데 화면에는 안 나온다.
+      # 매매·전월세 중 하나가 실패해도 갱신은 해야 한다 (넣은 만큼은 보여야 한다).
+      - name: 조회 뷰 갱신
+        if: ${{ !cancelled() }}
+        run: python scripts/refresh_views.py
+

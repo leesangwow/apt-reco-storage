@@ -56,3 +56,8 @@ jobs:
           else
             echo "전월세 CSV 없음 — 건너뜀"
           fi
+
+      # 적재만 하고 끝내면 DB에는 들어갔는데 화면에는 안 나온다.
+      - name: 조회 뷰 갱신
+        if: ${{ !cancelled() }}
+        run: python scripts/refresh_views.py

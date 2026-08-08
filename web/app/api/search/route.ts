@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const tokens = q.split(/\s+/).filter(Boolean);
 
   let query = supabase
-    .from('apt_prices')
+    .from('apt_prices_mv')
     .select('id, name, sido, gu, dong, year_built, hh, pyeong_supply, area_sqm, avg_price, deal_count, size_tier, size_label, tier_deal_count_12m')
     .limit(300);
 

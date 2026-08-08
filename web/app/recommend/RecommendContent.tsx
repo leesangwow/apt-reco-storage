@@ -65,7 +65,7 @@ function AnnualBadge({ n }: { n: number }) {
   );
 }
 
-interface ApiResult { base: BaseApt; total: number; items: RecItem[]; sameComplex?: RecItem[]; }
+interface ApiResult { base: BaseApt; total: number; truncated?: boolean; items: RecItem[]; sameComplex?: RecItem[]; }
 
 export default function RecommendContent() {
   const searchParams = useSearchParams();
@@ -131,6 +131,10 @@ export default function RecommendContent() {
           ? { price: String(priceParam), sido: sidoParam, gu: guParam }
           : { aptId: String(aptId) }),
         scope,
+        // 정렬은 DB가 한다. 상위 100곳이 무엇이냐가 정렬 기준에 따라 달라지므로
+        // 브라우저에서 뒤집을 수 없다 (준공순 오름차순과 내림차순은 다른 100곳이다).
+        sort,
+        dir: sortDir,
         band,
         ...(freshnessFilter ? { freshnessFilter } : {}),
         ...(regionId ? { regionId } : {}),
@@ -149,9 +153,8 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-    // sort·sortDir·visible은 일부러 뺐다. 정렬과 더보기는 받아둔 목록으로 처리하므로
-    // 여기 넣으면 화면만 바뀌면 될 일에 요청이 다시 나간다.
-  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, band, freshnessFilter, regionId, dealMode]);
+    // visible은 일부러 뺐다. 더보기는 받아둔 목록에서 표시만 늘리므로 요청이 없다.
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, band, freshnessFilter, regionId, dealMode]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -240,8 +243,9 @@ export default function RecommendContent() {
   const my = data?.base;
   const total = data?.total ?? 0;
 
-  // 서버가 쓰던 비교 함수를 그대로 옮겼다. 정렬 키(가격·면적·준공·거래량)가 전부
-  // 응답에 실려 있어 다시 조회할 필요가 없다.
+  // 서버가 이미 같은 기준으로 정렬해 보내지만 여기서 한 번 더 세운다.
+  // 가격차순은 서버가 기준가 아래·위를 따로 받아 합친 것이라 순서가 섞여 있고,
+  // 이렇게 두면 화면 순서가 어느 경우에도 이 비교 함수와 같다.
   // 평형순은 areaExact(반올림 전 전용면적)로 본다 — pyeong은 통칭 평형이라 정수여서
   // 같은 34평끼리 순서가 정해지지 않는다.
   const sortedItems = useMemo(() => {
@@ -424,7 +428,7 @@ export default function RecommendContent() {
           {regionId
             ? (regionId.includes('/') ? regionId.replace('/', ' ') : `${SIDO_SHORT[regionId] ?? regionId} 전체`)
             : scopeChips.find(c => c.key === scope)?.label ?? ''
-          } · 가격차 {band === '5%' ? '5% 이내' : band === '10%' ? '10% 이내' : `${band}억 이내`} · {total}곳
+          } · 가격차 {band === '5%' ? '5% 이내' : band === '10%' ? '10% 이내' : `${band}억 이내`} · {total}곳{data?.truncated ? '+' : ''}
         </div>
 
         {/* Freshness filter */}
