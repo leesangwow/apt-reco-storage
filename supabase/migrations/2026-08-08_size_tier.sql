@@ -52,9 +52,9 @@ create index if not exists idx_rent_tx_jeonse
   on rent_transactions (apt_id, contract_date desc, id desc) include (deposit_man)
   where deal_type = '전세' and contract_type = '신규';
 
--- 생성 컬럼 추가로 테이블이 재작성됐으니 통계와 visibility map을 다시 만든다.
--- (vacuum이 없으면 위 인덱스가 index only scan으로 안 잡힌다)
-vacuum analyze apts;
+-- 생성 컬럼 추가로 테이블이 재작성됐으니 통계를 다시 만든다.
+-- (analyze는 트랜잭션 안에서 돌지만 vacuum은 못 돈다. 아래 5번 참고)
+analyze apts;
 
 -- ─── 3. 뷰 ─────────────────────────────────────────────────────────────────
 -- 새 컬럼은 반드시 select 맨 뒤에 붙인다.
@@ -213,3 +213,14 @@ cross join lateral (
 -- ─── 4. PostgREST 스키마 캐시 갱신 ──────────────────────────────────────────
 -- 이걸 안 하면 새 컬럼을 select할 때 PostgREST가 "column does not exist"로 거절한다.
 notify pgrst, 'reload schema';
+
+-- ─── 5. (선택) vacuum ───────────────────────────────────────────────────────
+-- 생성 컬럼 추가로 테이블이 재작성돼 visibility map이 비어 있다. 그래서 위
+-- idx_apts_complex_tier가 당분간 index only scan으로 안 잡히고 힙까지 다녀온다.
+-- 결과는 똑같고 조금 느릴 뿐이라 급하지 않다 — 두면 autovacuum이 알아서 채운다.
+--
+-- 바로 정리하고 싶으면 아래 한 줄만 따로 실행할 것.
+-- vacuum은 트랜잭션 안에서 못 돌기 때문에 위 SQL과 같이 실행하면
+-- "VACUUM cannot run inside a transaction block"으로 전부 롤백된다.
+--
+--   vacuum analyze apts;
