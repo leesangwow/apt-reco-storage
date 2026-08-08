@@ -66,7 +66,22 @@ export interface ScopeChip {
   label: string;
 }
 
-export function getScopeChips(sido: string, gu: string): ScopeChip[] {
+/**
+ * 시군구 이름. 세종은 시군구 단계가 없어 gu가 sido와 같게 들어온다
+ * ('세종특별자치시 집현동'의 시군구는 세종시 자체다). 그때는 빈 문자열로 돌려
+ * "세종 세종특별자치시"처럼 겹쳐 보이지 않게 한다.
+ */
+export function guName(sido: string, gu: string): string {
+  return gu && gu !== sido ? gu : '';
+}
+
+/** 화면에 찍는 "구 동". 세종처럼 구가 없으면 동만 나온다. */
+export function areaLabel(sido: string, gu: string, dong: string): string {
+  return [guName(sido, gu), dong].filter(Boolean).join(' ');
+}
+
+export function getScopeChips(sido: string, gu0: string): ScopeChip[] {
+  const gu = guName(sido, gu0);   // 세종은 구 칩이 사라진다 — 실제로 구가 없다
   const sidoShort = SIDO_SHORT[sido] ?? sido;
   const neighborLabel = NEIGHBOR_LABEL[sido] ?? '주변 지역';
   const neighbors = NEIGHBORS[sido] ?? [];

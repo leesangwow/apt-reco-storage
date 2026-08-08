@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { SIDO_SHORT } from '@/lib/regions';
+import { areaLabel, SIDO_SHORT } from '@/lib/regions';
 
 function DealDropdown({ value, onChange }: { value: DealMode; onChange: (v: DealMode) => void }) {
   const [open, setOpen] = useState(false);
@@ -65,7 +65,9 @@ function won(n: number): string {
   return t + '억';
 }
 
-interface AptVariant { aptId: number; pyeong: number; area: number; price: number; }
+// 평형 구간마다 한 개. label은 '34평' 또는 '32~35평'.
+interface AptVariant { aptId: number; pyeong: number; area: number; price: number;
+                       label: string; annualDeals: number; dealCount: number; }
 interface Complex {
   name: string; sido: string; gu: string; dong: string;
   year_built: number | null; hh: number | null;
@@ -233,7 +235,7 @@ function LandingContent() {
                               </span>
                             </div>
                             <div className="text-[12px] text-[#9A9A92] mt-[2px]">
-                              {c.gu} {c.dong} · {c.year_built ?? '-'}년 · {c.variants.map(v => `${v.pyeong}평`).join(' / ')}
+                              {areaLabel(c.sido, c.gu, c.dong)} · {c.year_built ?? '-'}년 · {c.variants.map(v => v.label).join(' / ')}
                             </div>
                           </div>
                           <div className="flex-none text-right">
@@ -257,7 +259,7 @@ function LandingContent() {
                 </button>
                 <div className="text-[17px] font-extrabold text-[#191919] mb-[2px]">{selectedComplex?.name}</div>
                 <div className="text-[12.5px] text-[#8A8A82] mb-[20px]">
-                  {selectedComplex?.gu} {selectedComplex?.dong} · {selectedComplex?.year_built ?? '-'}년
+                  {selectedComplex ? areaLabel(selectedComplex.sido, selectedComplex.gu, selectedComplex.dong) : ''} · {selectedComplex?.year_built ?? '-'}년
                 </div>
                 <div className="text-[12px] font-bold text-[#A0A098] mb-[14px]">평형을 선택하세요</div>
                 <div className="flex flex-col gap-[10px]">
@@ -266,7 +268,7 @@ function LandingContent() {
                       className="flex items-center justify-between border border-[#EDEDE7] bg-white rounded-[16px] px-[16px] py-[15px] cursor-pointer w-full hover:border-[#FFD400] hover:bg-[#FFFBE6] transition-colors">
                       <div className="text-left">
                         <div className="text-[16px] font-extrabold text-[#191919]">
-                          {v.pyeong}평<span className="ml-[8px] text-[13px] font-medium text-[#9A9A92]">{v.area}㎡</span>
+                          {v.label}<span className="ml-[8px] text-[13px] font-medium text-[#9A9A92]">전용 {v.area}㎡</span>
                         </div>
                       </div>
                       <div className="flex items-center gap-[8px]">

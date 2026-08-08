@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { SortKey, SortDir, AddedRegion } from '../types';
-import { getScopeChips, SIDO_SHORT, NEIGHBOR_LABEL } from '@/lib/regions';
+import { areaLabel, getScopeChips, guName, SIDO_SHORT, NEIGHBOR_LABEL } from '@/lib/regions';
 
 function won(n: number): string {
   const v = Math.abs(n);
@@ -325,7 +325,7 @@ export default function RecommendContent() {
                     {lastBaseRef.current?.name ?? '—'}
                   </div>
                   <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">
-                    {lastBaseRef.current ? `${lastBaseRef.current.gu} ${lastBaseRef.current.dong} · ${lastBaseRef.current.sizeLabel}` : ''}
+                    {lastBaseRef.current ? `${areaLabel(lastBaseRef.current.sido, lastBaseRef.current.gu, lastBaseRef.current.dong)} · ${lastBaseRef.current.sizeLabel}` : ''}
                   </div>
                 </div>
                 <div className="text-right flex-none">
@@ -338,7 +338,7 @@ export default function RecommendContent() {
               <div className="flex items-center justify-between gap-[10px]">
                 <div className="min-w-0">
                   <div className="text-[18px] font-extrabold text-[#191919] tracking-tight">{won(my.price)}대</div>
-                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">{SIDO_SHORT[my.sido] ?? my.sido}{my.gu ? ` ${my.gu}` : ' 전체'}</div>
+                  <div className="text-[12.5px] text-[#8A8A82] mt-[3px]">{SIDO_SHORT[my.sido] ?? my.sido}{guName(my.sido, my.gu) ? ` ${guName(my.sido, my.gu)}` : ' 전체'}</div>
                 </div>
                 <div className="text-right flex-none">
                   <div className="text-[11px] text-[#ADADA4]">가격 기준 탐색</div>
@@ -352,7 +352,7 @@ export default function RecommendContent() {
                     <button onClick={showToast} className="border-none cursor-pointer text-[12px] leading-none px-[5px] py-[2px] bg-[#F4F4F0] text-[#ADADA4] rounded-[5px] hover:bg-[#EAEAE4] transition-colors flex-none">›</button>
                   </div>
                   <div className="flex items-center gap-[6px] mt-[3px]">
-                    <span className="text-[12.5px] text-[#8A8A82]">{my.gu} {my.dong} · {my.sizeLabel} · {my.year ?? '-'}년</span>
+                    <span className="text-[12.5px] text-[#8A8A82]">{areaLabel(my.sido, my.gu, my.dong)} · {my.sizeLabel} · {my.year ?? '-'}년</span>
                     {my.freshness && (() => {
                       const f = FRESHNESS_CONFIG[my.freshness];
                       const label = my.freshness === 'scarce' ? `${my.dealCount}건 · 6개월↓` : f.label;
@@ -531,7 +531,7 @@ export default function RecommendContent() {
                         </button>
                       </div>
                       <div className="text-[11px] text-[#9A9A92] mt-[2px]">
-                        {SIDO_SHORT[r.sido] ?? r.sido} {r.gu} {r.dong}{r.km ? ` · 직선 ${r.km}km · ${r.mins}` : ''}
+                        {SIDO_SHORT[r.sido] ?? r.sido} {areaLabel(r.sido, r.gu, r.dong)}{r.km ? ` · 직선 ${r.km}km · ${r.mins}` : ''}
                       </div>
                     </div>
                   </div>
@@ -680,7 +680,7 @@ export default function RecommendContent() {
                 <>
                   <button onClick={() => setSelectedComplex(null)} className="flex items-center gap-[6px] text-[13px] text-[#9A9A92] font-semibold mb-[14px] border-none bg-transparent cursor-pointer p-0">‹ 다시 검색</button>
                   <div className="text-[17px] font-extrabold text-[#191919] mb-[4px]">{selectedComplex.name}</div>
-                  <div className="text-[12.5px] text-[#8A8A82] mb-[20px]">{selectedComplex.gu} {selectedComplex.dong} · {selectedComplex.year_built ?? '-'}년</div>
+                  <div className="text-[12.5px] text-[#8A8A82] mb-[20px]">{areaLabel(selectedComplex.sido, selectedComplex.gu, selectedComplex.dong)} · {selectedComplex.year_built ?? '-'}년</div>
                   <div className="text-[12px] font-bold text-[#A0A098] mb-[12px]">평형을 선택하세요</div>
                   <div className="flex flex-col gap-[9px]">
                     {selectedComplex.variants.map(v => (
@@ -722,7 +722,7 @@ export default function RecommendContent() {
                               {c.sido.replace('특별시','').replace('광역시','').replace('특별자치시','').replace('특별자치도','').replace('도','').replace('시','')}
                             </span>
                           </div>
-                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">{c.gu} {c.dong} · {c.variants.map(v => v.label).join('/')}</div>
+                          <div className="text-[11.5px] text-[#9A9A92] mt-[2px]">{areaLabel(c.sido, c.gu, c.dong)} · {c.variants.map(v => v.label).join('/')}</div>
                         </div>
                         <span className="text-[12px] text-[#9A9A92] whitespace-nowrap">평형 선택 ›</span>
                       </button>

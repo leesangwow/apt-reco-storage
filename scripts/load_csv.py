@@ -26,6 +26,7 @@ from tqdm import tqdm
 sys.stdout.reconfigure(line_buffering=True)  # CI 로그에 진행 상황이 바로 찍히도록
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from address import parse_sido_gu_dong  # noqa: E402
 from run_log import Entry, RunLogger  # noqa: E402
 
 load_dotenv()
@@ -43,15 +44,6 @@ DB_PARAMS = {
 
 
 # ── CSV 전처리 ──────────────────────────────────────────────
-
-def parse_sido_gu_dong(시군구: str):
-    """'서울특별시 도봉구 방학동' → ('서울특별시', '도봉구', '방학동')"""
-    parts = 시군구.strip().split()
-    sido = parts[0] if len(parts) > 0 else ""
-    gu   = parts[1] if len(parts) > 1 else ""
-    dong = parts[2] if len(parts) > 2 else ""
-    return sido, gu, dong
-
 
 def parse_price(val: str) -> int:
     """'48,500' → 48500"""
