@@ -242,8 +242,16 @@ select
   a.size_tier,
   -- 라벨은 그 단지·구간에 실제로 있는 평형에서 뽑는다. 구간 이름(32~35평)을 그대로 쓰면
   -- 34평만 있는 단지도 32~35평으로 보여 실제보다 넓게 느껴진다.
-  case when g.lo_py = g.hi_py then g.lo_py || '평'
-       else g.lo_py || '~' || g.hi_py || '평' end as size_label,
+  case
+    when g.lo_py = g.hi_py then g.lo_py || '평'
+    -- 면적이 3% 미만으로만 벌어졌으면 실제로는 한 평형이고, 통칭 평 환산값이
+    -- 반올림 경계를 걸쳤을 뿐이다. 고산더라피니엘 55.52~55.99㎡가 22.39·22.58평으로
+    -- 갈려 "22~23평"이 되는 식으로, 운영 데이터의 범위 라벨 6,147개 중 1,331개가
+    -- 이 경우였다. 이때는 가운데 면적의 평 하나로 적는다.
+    when g.hi_area < g.lo_area * 1.03
+      then round((g.lo_area + g.hi_area) / 2 / (3.3058 * 0.75))::int || '평'
+    else g.lo_py || '~' || g.hi_py || '평'
+  end as size_label,
   coalesce(g.tier_deal_count_12m, 0)::int         as tier_deal_count_12m
 from apts a
 -- 최신 3건 집계
@@ -286,6 +294,8 @@ left join lateral (
 cross join lateral (
   select min(s.pyeong_supply) as lo_py,
          max(s.pyeong_supply) as hi_py,
+         min(s.area_sqm)      as lo_area,
+         max(s.area_sqm)      as hi_area,
          sum(c.n)             as tier_deal_count_12m
     from apts s
     cross join lateral (
@@ -323,8 +333,16 @@ select
   -- 평형 구간. 매매 뷰와 같은 규칙, 거래량만 전세·신규 기준이다.
   a.pyeong_supply,
   a.size_tier,
-  case when g.lo_py = g.hi_py then g.lo_py || '평'
-       else g.lo_py || '~' || g.hi_py || '평' end as size_label,
+  case
+    when g.lo_py = g.hi_py then g.lo_py || '평'
+    -- 면적이 3% 미만으로만 벌어졌으면 실제로는 한 평형이고, 통칭 평 환산값이
+    -- 반올림 경계를 걸쳤을 뿐이다. 고산더라피니엘 55.52~55.99㎡가 22.39·22.58평으로
+    -- 갈려 "22~23평"이 되는 식으로, 운영 데이터의 범위 라벨 6,147개 중 1,331개가
+    -- 이 경우였다. 이때는 가운데 면적의 평 하나로 적는다.
+    when g.hi_area < g.lo_area * 1.03
+      then round((g.lo_area + g.hi_area) / 2 / (3.3058 * 0.75))::int || '평'
+    else g.lo_py || '~' || g.hi_py || '평'
+  end as size_label,
   coalesce(g.tier_deal_count_12m, 0)::int         as tier_deal_count_12m
 from apts a
 cross join lateral (
@@ -363,6 +381,8 @@ left join lateral (
 cross join lateral (
   select min(s.pyeong_supply) as lo_py,
          max(s.pyeong_supply) as hi_py,
+         min(s.area_sqm)      as lo_area,
+         max(s.area_sqm)      as hi_area,
          sum(c.n)             as tier_deal_count_12m
     from apts s
     cross join lateral (
