@@ -158,6 +158,7 @@ export default function RecommendContent() {
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
+
   // 시/도 목록 (최초 1회)
   useEffect(() => {
     fetch('/api/regions')
@@ -591,8 +592,8 @@ export default function RecommendContent() {
         {/* Region bottom sheet */}
         {regionOpen && (
           <>
-            <div className="absolute inset-0 bg-[rgba(20,20,18,.34)]" onClick={() => setRegionOpen(false)} />
-            <div className="absolute left-0 right-0 bottom-0 bg-white rounded-t-[26px] px-[20px] pt-[10px] pb-[26px] max-h-[88%] overflow-y-auto" style={{animation:'sheetUp .26s cubic-bezier(.22,1,.36,1)'}}>
+            <div className="fixed inset-0 z-40 bg-[rgba(20,20,18,.34)]" onClick={() => setRegionOpen(false)} />
+            <div className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[390px] bg-white rounded-t-[26px] px-[20px] pt-[10px] pb-[26px] max-h-[88dvh] overflow-y-auto overscroll-contain" style={{animation:'sheetUp .26s cubic-bezier(.22,1,.36,1)'}}>
               <div className="w-[38px] h-[4px] bg-[#E2E2DC] rounded-[3px] mx-auto mb-[16px] mt-[6px]" />
               <div className="flex justify-between items-center mb-[5px]">
                 <div className="text-[17px] font-extrabold text-[#191919]">{addedRegions.length > 0 ? `지역 추가 · ${addedRegions.length}곳 선택됨` : '지역 추가'}</div>
@@ -673,8 +674,8 @@ export default function RecommendContent() {
         {/* Search bottom sheet */}
         {searchOpen && (
           <>
-            <div className="absolute inset-0 bg-[rgba(20,20,18,.34)]" onClick={() => { setSearchOpen(false); setSelectedComplex(null); setQ(''); }} />
-            <div className="absolute left-0 right-0 bottom-0 bg-white rounded-t-[26px] px-[20px] pt-[10px] pb-[26px] max-h-[84%] overflow-y-auto" style={{animation:'sheetUp .26s cubic-bezier(.22,1,.36,1)'}}>
+            <div className="fixed inset-0 z-40 bg-[rgba(20,20,18,.34)]" onClick={() => { setSearchOpen(false); setSelectedComplex(null); setQ(''); }} />
+            <div className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[390px] bg-white rounded-t-[26px] px-[20px] pt-[10px] pb-[26px] max-h-[84dvh] overflow-y-auto overscroll-contain" style={{animation:'sheetUp .26s cubic-bezier(.22,1,.36,1)'}}>
               <div className="w-[38px] h-[4px] bg-[#E2E2DC] rounded-[3px] mx-auto mb-[16px] mt-[6px]" />
               {selectedComplex ? (
                 <>
