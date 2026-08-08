@@ -13,6 +13,8 @@ const toItem = (r: Row) => ({
   price: Number(r.avg_price),
   pyeong: r.pyeong_supply,
   area: Math.round(Number(r.area_sqm)),
+  // 정렬 전용. area는 정수 ㎡로 반올림돼 있어 84.28과 84.74를 구분하지 못한다.
+  areaExact: Number(r.area_sqm),
   sizeTier: r.size_tier, sizeLabel: r.size_label,
   year: r.year_built, hh: r.hh,
   km: null, mins: null,
@@ -27,9 +29,6 @@ export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
   const aptId           = Number(p.get('aptId'));
   const scope           = p.get('scope')           ?? 'gu';
-  const sort            = p.get('sort')            ?? 'diff';
-  const dir             = p.get('dir')             ?? 'asc';
-  const page            = Number(p.get('page')     ?? '0');
   const band            = p.get('band')            ?? '5%';
   const freshnessFilter = p.get('freshnessFilter');
   const regionId        = p.get('regionId');
@@ -152,26 +151,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const asc = dir === 'asc';
-  const sorted = Array.from(complexMap.values()).sort((a, b) => {
-    let v = 0;
-    if      (sort === 'diff')  v = Math.abs(Number(a.avg_price) - myPrice) - Math.abs(Number(b.avg_price) - myPrice);
-    else if (sort === 'price') v = Number(a.avg_price) - Number(b.avg_price);
-    else if (sort === 'area')  v = Number(a.pyeong) - Number(b.pyeong);
-    else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
-    // 거래량은 구간 합계로 비교한다. 행별 값은 같은 평형이 쪼개진 만큼 나뉘어 있어
-    // 파편이 많은 단지일수록 거래가 적어 보인다.
-    else if (sort === 'deals') v = Number(a.tier_deal_count_12m ?? 0) - Number(b.tier_deal_count_12m ?? 0);
-    else                       v = Math.abs(Number(a.avg_price) - myPrice) - Math.abs(Number(b.avg_price) - myPrice);
-    return asc ? v : -v;
-  });
-
-  const total = sorted.length;
-  const items = sorted.slice(0, (page + 1) * 3).map(toItem);
+  // 정렬과 페이지 나누기는 브라우저가 한다. 여기서 잘라 보내면 "더보기" 한 번에
+  // 추천 3곳을 더 얻으려고 이 요청 전체(단지 500곳 뷰 계산 + 왕복 2번)를 다시 치러야 한다.
+  // 정렬 키는 전부 아래 payload에 실려 있어 다시 조회할 이유가 없다.
+  // 순서는 추린 그대로 둔다 — 미리 정렬해 보내면 동점 항목 순서가 달라진다.
+  const items = Array.from(complexMap.values()).map(toItem);
 
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
-        pyeong: 0, area: 0, sizeTier: 0, sizeLabel: '', year: null, hh: null,
+        pyeong: 0, area: 0, areaExact: 0, sizeTier: 0, sizeLabel: '', year: null, hh: null,
         dealCount: 0, annualDeals: 0, latestDate: '', freshness: 'fresh_high' as const,
         latestPrice: 0, latestFloor: null, latestContractDate: '',
         priceMode: true }
@@ -181,5 +169,5 @@ export async function GET(req: NextRequest) {
 
   const sameComplex = dedupeByTier(sameRes.data ?? []).map(toItem);
 
-  return NextResponse.json({ base: basePayload, total, items, sameComplex });
+  return NextResponse.json({ base: basePayload, total: items.length, items, sameComplex });
 }

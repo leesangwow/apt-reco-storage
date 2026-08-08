@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { SortKey, SortDir, AddedRegion } from '../types';
 import { getScopeChips, SIDO_SHORT, NEIGHBOR_LABEL } from '@/lib/regions';
@@ -11,13 +11,14 @@ function won(n: number): string {
   return t + '억';
 }
 
+const PAGE_SIZE = 3;   // 한 번에 펼쳐 보여줄 추천 개수
 const THUMB_COLORS = ['#F2B705', '#6AB7A8', '#E8855B', '#9C8AD6', '#7FA6E0'];
 
 interface BaseApt {
   id: number; name: string; sido: string; gu: string; dong: string;
   // pyeong은 통칭 평형(전용 84㎡ → 34평), sizeLabel은 그 평형 구간에 실제로 있는
   // 평형 범위("34평" 또는 "32~35평"). area는 전용면적 그대로다.
-  price: number; pyeong: number; area: number; sizeTier: number; sizeLabel: string;
+  price: number; pyeong: number; area: number; areaExact: number; sizeTier: number; sizeLabel: string;
   year: number | null; hh: number | null;
   dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
@@ -27,7 +28,7 @@ type Freshness = 'fresh_high' | 'fresh_mid' | 'fresh_low' | 'scarce';
 
 interface RecItem {
   id: number; name: string; sido: string; gu: string; dong: string;
-  price: number; pyeong: number; area: number; sizeTier: number; sizeLabel: string;
+  price: number; pyeong: number; area: number; areaExact: number; sizeTier: number; sizeLabel: string;
   year: number | null; hh: number | null;
   km: number | null; mins: string | null;
   dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
@@ -83,7 +84,9 @@ export default function RecommendContent() {
   const [scope, setScope] = useState(priceMode ? 'gu' : 'gu');
   const [sort, setSort] = useState<SortKey>('diff');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [page, setPage] = useState(0);
+  // 화면에 몇 곳까지 펼쳐 보일지. 서버는 조건에 맞는 곳을 한 번에 다 내려주고,
+  // "더보기"는 이 숫자만 늘린다 (네트워크 없음).
+  const [visible, setVisible] = useState(PAGE_SIZE);
   const [band, setBand] = useState('5%');
   // null=전체, 'fresh_high'=1개월3건, 'fresh_mid_up'=3개월3건이상
   const [freshnessFilter, setFreshnessFilter] = useState<null | 'fresh_high' | 'fresh_mid_up'>(null);
@@ -128,9 +131,6 @@ export default function RecommendContent() {
           ? { price: String(priceParam), sido: sidoParam, gu: guParam }
           : { aptId: String(aptId) }),
         scope,
-        sort,
-        dir: sortDir,
-        page: String(page),
         band,
         ...(freshnessFilter ? { freshnessFilter } : {}),
         ...(regionId ? { regionId } : {}),
@@ -149,7 +149,9 @@ export default function RecommendContent() {
     } finally {
       setLoading(false);
     }
-  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, sort, sortDir, page, band, freshnessFilter, regionId, dealMode]);
+    // sort·sortDir·visible은 일부러 뺐다. 정렬과 더보기는 받아둔 목록으로 처리하므로
+    // 여기 넣으면 화면만 바뀌면 될 일에 요청이 다시 나간다.
+  }, [aptId, priceMode, priceParam, sidoParam, guParam, scope, band, freshnessFilter, regionId, dealMode]);
 
   useEffect(() => { fetchRecommend(); }, [fetchRecommend]);
 
@@ -192,11 +194,11 @@ export default function RecommendContent() {
     const defaults: Record<SortKey, SortDir> = { diff: 'asc', dist: 'asc', area: 'desc', year: 'desc', price: 'asc', deals: 'desc' };
     if (sort === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSort(k); setSortDir(defaults[k]); }
-    setPage(0);
+    setVisible(PAGE_SIZE);
   }
 
   function handleSelectScope(k: string, rid: string | null = null) {
-    setScope(k); setRegionId(rid); setPage(0);
+    setScope(k); setRegionId(rid); setVisible(PAGE_SIZE);
   }
 
   function toggleRegion(id: string, sido: string, gu: string) {
@@ -210,12 +212,12 @@ export default function RecommendContent() {
       handleSelectScope(id, id);
       return [...prev, { id, sido, gu }];
     });
-    setPage(0);
+    setVisible(PAGE_SIZE);
   }
 
   function handleCardClick(r: RecItem) {
     router.push(`/recommend?aptId=${r.id}`);
-    setPage(0);
+    setVisible(PAGE_SIZE);
   }
 
   function handlePickComplex(c: typeof searchResults[0]) {
@@ -230,14 +232,34 @@ export default function RecommendContent() {
 
   function handlePickPyeong(aid: number) {
     router.push(`/recommend?aptId=${aid}`);
-    setSearchOpen(false); setSelectedComplex(null); setQ(''); setPage(0); setScope('gu');
+    setSearchOpen(false); setSelectedComplex(null); setQ(''); setVisible(PAGE_SIZE); setScope('gu');
   }
 
   function showToast() { setToast(true); setTimeout(() => setToast(false), 2000); }
 
   const my = data?.base;
-  const items = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  // 서버가 쓰던 비교 함수를 그대로 옮겼다. 정렬 키(가격·면적·준공·거래량)가 전부
+  // 응답에 실려 있어 다시 조회할 필요가 없다.
+  // 평형순은 areaExact(반올림 전 전용면적)로 본다 — pyeong은 통칭 평형이라 정수여서
+  // 같은 34평끼리 순서가 정해지지 않는다.
+  const sortedItems = useMemo(() => {
+    const src = data?.items ?? [];
+    const myPrice = data?.base?.price ?? 0;
+    const asc = sortDir === 'asc';
+    return [...src].sort((a, b) => {
+      let v = 0;
+      if      (sort === 'price') v = a.price - b.price;
+      else if (sort === 'area')  v = a.areaExact - b.areaExact;
+      else if (sort === 'year')  v = (a.year ?? 0) - (b.year ?? 0);
+      else if (sort === 'deals') v = (a.annualDeals ?? 0) - (b.annualDeals ?? 0);
+      else                       v = Math.abs(a.price - myPrice) - Math.abs(b.price - myPrice);
+      return asc ? v : -v;
+    });
+  }, [data, sort, sortDir]);
+
+  const items = sortedItems.slice(0, visible);
   const allShown = items.length >= total;
 
   const scopeChips = my
@@ -270,7 +292,7 @@ export default function RecommendContent() {
         {/* 매매/전세 스위치 */}
         <div className="flex bg-[#EAEAE4] rounded-[12px] p-[3px] mx-[18px] mb-[10px]">
           {(['buy', 'rent'] as const).map(m => (
-            <button key={m} onClick={() => { setDealMode(m); setPage(0); setScope('gu'); setData(null); setNoRentData(false); }}
+            <button key={m} onClick={() => { setDealMode(m); setVisible(PAGE_SIZE); setScope('gu'); setData(null); setNoRentData(false); }}
               className={`flex-1 text-[13px] font-bold py-[7px] rounded-[9px] transition-all cursor-pointer border-none ${dealMode === m ? 'bg-white text-[#191919] shadow-sm' : 'bg-transparent text-[#8A8A82]'}`}>
               {m === 'buy' ? '매매' : '전세'}
             </button>
@@ -415,7 +437,7 @@ export default function RecommendContent() {
           ] as const).map(opt => {
             const on = freshnessFilter === opt.key;
             return (
-              <button key={String(opt.key)} onClick={() => { setFreshnessFilter(opt.key); setPage(0); }}
+              <button key={String(opt.key)} onClick={() => { setFreshnessFilter(opt.key); setVisible(PAGE_SIZE); }}
                 className={`flex items-center gap-[5px] flex-none border cursor-pointer text-[12px] font-bold px-[12px] py-[6px] rounded-[10px] transition-all ${on ? 'bg-[#1A1A1A] text-white border-transparent' : 'border-[#EAEAE4] bg-white text-[#76766E]'}`}
               >
                 <span className="w-[6px] h-[6px] rounded-full flex-none" style={{ background: on ? 'white' : opt.dot }} />
@@ -432,7 +454,7 @@ export default function RecommendContent() {
             const label = b === '5%' ? '±5%' : b === '10%' ? '±10%' : `±${b}억`;
             const on = band === b;
             return (
-              <button key={b} onClick={() => { setBand(b); setPage(0); }}
+              <button key={b} onClick={() => { setBand(b); setVisible(PAGE_SIZE); }}
                 className={`flex-none border cursor-pointer text-[12px] px-[12px] py-[6px] rounded-[10px] whitespace-nowrap transition-all ${on ? 'bg-[#1A1A1A] text-white font-extrabold border-transparent' : 'border-[#EAEAE4] bg-white text-[#80807A] font-semibold'}`}
               >{label}</button>
             );
@@ -553,9 +575,9 @@ export default function RecommendContent() {
         </div>
 
         {/* More / fold */}
-        {!noRentData && total > 3 && (
+        {!noRentData && total > PAGE_SIZE && (
           <div className="px-[18px] pt-[14px] pb-[28px]">
-            <button onClick={() => { if (allShown) setPage(0); else setPage(p => p + 1); }}
+            <button onClick={() => { if (allShown) setVisible(PAGE_SIZE); else setVisible(v => v + PAGE_SIZE); }}
               className="w-full border border-[#E6E6E0] bg-white text-[#3A3A36] text-[14px] font-extrabold py-[14px] rounded-[15px] cursor-pointer">
               {allShown ? '접기' : `더보기 · 남은 ${total - items.length}곳`}
             </button>
@@ -604,7 +626,7 @@ export default function RecommendContent() {
                             }
                             setRegionId(sheetSido);
                             setScope(sheetSido);
-                            setPage(0);
+                            setVisible(PAGE_SIZE);
                             return [...prev, { id: sheetSido, sido: sheetSido, gu: '' }];
                           });
                         }}
