@@ -1,0 +1,54 @@
+name: 조회 뷰 갱신
+
+# apt_prices_mv / apt_rent_prices_mv를 다시 계산한다.
+#
+# 적재 워크플로 3개는 마지막에 이걸 자동으로 하므로 평소에는 누를 일이 없다.
+# 손으로 돌려야 하는 경우는 적재가 아닌 방법으로 DB를 건드렸을 때다:
+#   * SQL Editor에서 행을 지우거나 고쳤을 때 (주소 정리 등)
+#   * 갱신 단계만 실패해서 다시 돌리고 싶을 때
+#
+# 갱신하지 않으면 DB와 화면이 어긋난다 — 지운 단지가 계속 보이거나
+# 새로 들어온 거래가 안 보인다.
+on:
+  workflow_dispatch:
+    inputs:
+      type:
+        description: '갱신할 뷰'
+        required: true
+        default: 'both'
+        type: choice
+        options: [both, buy, rent]
+
+# 적재 중에 갱신이 겹치면 방금 넣은 것과 아닌 것이 섞인 상태로 굳는다.
+# 적재 워크플로와 그룹을 공유해 순서대로 돌게 한다.
+concurrency:
+  group: auto-collect
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 갱신에는 DB 커넥션만 있으면 된다. pandas·Playwright는 필요 없다.
+      - name: 의존성 설치
+        run: pip install psycopg2-binary python-dotenv
+
+      - name: 갱신
+        run: python scripts/refresh_views.py --type "${{ github.event.inputs.type }}"
