@@ -125,33 +125,24 @@ create or replace view region_data_stats as
     join apts a on a.id = r.apt_id
    group by a.sido;
 
-
--- ─── 평형 구간 (size_tier) ──────────────────────────────────────────────────
--- apts의 키가 (단지명, 구, 동, 전용면적)이라 같은 평형이 84.28·84.74·84.97처럼
--- 여러 행으로 쪼개진다. 운영 데이터에서 해밀마을1단지 34평은 14개 행, 자연앤힐스테이트는
--- 13개 행이었다. 그만큼 거래량·신선도가 나뉘어 어느 행을 봐도 그 평형의 진짜 수치가
--- 안 보이고, 6개월 3건을 못 채워 뷰에서 아예 빠지는 행도 생긴다.
+-- ─── 왜 LATERAL인가 ─────────────────────────────────────────────────────────
+-- 예전에는 CTE(recent/latest3/yearly)로 apt_id별 집계를 먼저 만들고 마지막에
+-- apts를 조인했다. 그러면 gu·sido 조건이 CTE 안으로 못 내려간다. CTE가 두 번
+-- 참조돼 Postgres가 materialize하는 것도 겹쳤다.
 --
--- 묶는 규칙: 전용면적을 통칭 평형으로 바꾼 뒤 20평 이상은 4평, 미만은 2평 단위로 자른다.
---   통칭평 = round(전용면적 / (3.3058 * 0.75))     0.75는 통상 전용률(전용/공급)
---   32~35평 = 전용 78.10~88.01㎡  ← 국민평형(84㎡)이 통째로 들어온다
+-- 그 결과 강남구 27곳을 얻는 데 전국을 다 계산했다 (운영 explain analyze):
+--   recent WindowAgg  269,094행  4,471ms
+--   연간 집계         539,728행    994ms
+--   가격 필터 후       1,363행
+--   gu 필터 후            27행   ← 여기서 99%를 버린다
+--   Execution Time: 6,803ms
 --
--- 왜 고정 구간인가: 처음엔 "이웃 면적과 간격이 벌어지면 끊기"를 검토했으나 운영
--- 데이터에서 연쇄가 폭주했다. 해운대 아이파크는 45개 면적이 80.57~139.44㎡에 평균
--- 1.34㎡ 간격으로 깔려 있어 전부 한 덩어리가 됐다. 고정 구간은 그 폭주가 원천적으로 없다.
+-- apts를 구동 테이블로 두고 LATERAL로 뒤집으면 gu 조건이 맨 먼저 걸리고,
+-- 살아남은 단지에 대해서만 transactions_unique 인덱스로 최근 몇 건을 집어온다.
+-- 269,094행 정렬이 통째로 사라진다.
 --
--- 왜 경계를 ㎡가 아니라 평으로 잡았나: ㎡ 어림수(80·92)로 자르면 32평(78.10~80.57㎡)처럼
--- 한 평이 두 구간에 걸쳐, 79.99와 80.00이 다른 구간으로 간다. 평 단위면 걸침이 없다.
---
--- 20평 미만을 2평으로 좁힌 이유: 4평 구간을 그대로 내리면 4~7평이 전용 8.68~18.59㎡로
--- 폭 114%가 된다. 실제로 센트럴S타운은 30개 면적이 12.07~16.43㎡에 있어 한 덩어리가 된다.
---
--- tier_min이 구간 식별자이자 구간의 시작 평이다. 20평 경계에서 값이 겹치지 않는다
--- (19평 → 18, 20평 → 20).
---
--- ⚠ 평당가를 구할 때 이 구간을 쓰면 안 된다. 32~35평 구간은 전용 78.10~88.01㎡로
---   12.7% 벌어져 있어, 구간 평균가를 구간 대표 평형으로 나누면 값이 왜곡된다.
---   평당가는 반드시 행별 area_sqm으로 계산할 것.
+-- 정렬에 `, t.id desc` 동률 처리를 넣었다. 예전 row_number()는 같은 계약일이
+-- 여러 건이면 임의로 골라서 실행할 때마다 값이 달라질 수 있었다.
 
 -- ─── apt_prices 뷰 (매매) ───────────────────────────────────────────────────
 -- 최근 6개월 내 최신 3건 평균 + 신선도. 금액 단위는 '억'(만원 / 10000).
@@ -159,106 +150,10 @@ create or replace view region_data_stats as
 -- 신선도 판정에 latest_date가 아니라 oldest_date(최신 3건 중 가장 오래된 건)를 쓴다.
 -- "최근 거래가 있다"가 아니라 "최근 3건이 모두 그 기간 안에 몰려 있다"는 뜻이라
 -- 거래가 꾸준한 단지만 fresh로 잡히는 더 엄격한 기준이다.
+-- LATERAL 재작성판. 컬럼 이름·순서·타입은 기존과 동일해야 한다
+-- (create or replace view는 기존 컬럼을 바꾸지 못하고, 앱이 그대로 읽는다).
+
 create or replace view apt_prices as
-with tier_map as (
-  select a.id as apt_id, a.name, a.gu, a.dong, x.p,
-         case when x.p >= 20 then (x.p / 4) * 4 else (x.p / 2) * 2 end as tier_min
-    from apts a,
-         lateral (select round(a.area_sqm / (3.3058 * 0.75))::int as p) x
-),
-tier_info as (
-  -- 라벨은 그 단지·구간에 실제로 있는 면적에서 뽑는다. 구간 이름(32~35평)을 그대로 쓰면
-  -- 34평만 있는 단지도 32~35평으로 보여 실제보다 넓게 느껴진다.
-  --
-  -- group_id는 아래 집계들이 쓰는 숫자 그룹 키다. (name, gu, dong, tier_min) 네 컬럼으로
-  -- 직접 파티션하면 텍스트 3개를 정렬해야 해서 윈도 함수가 3.7배 느려진다 (10만 단지
-  -- 기준 11.5초 → 42.3초). apt_id는 정수라 정렬이 훨씬 싸다.
-  select name, gu, dong, tier_min,
-         min(apt_id) as group_id,
-         min(p) as lo_py, max(p) as hi_py
-    from tier_map
-   group by name, gu, dong, tier_min
-),
-tier_key as (
-  select m.apt_id, i.group_id
-    from tier_map m
-    join tier_info i
-      on i.name = m.name and i.gu = m.gu and i.dong = m.dong and i.tier_min = m.tier_min
-),
-recent as (
-  select
-    apt_id,
-    price_man,
-    contract_date,
-    floor,
-    row_number() over (partition by apt_id order by contract_date desc) as rn
-  from transactions
-  where contract_date >= current_date - interval '6 months'
-),
-latest3 as (
-  -- 최신 3건 집계
-  select
-    apt_id,
-    round(avg(price_man) / 10000.0, 2) as avg_price,
-    count(*)                           as deal_count,
-    max(contract_date)                 as latest_date,
-    min(contract_date)                 as oldest_date
-  from recent
-  where rn <= 3
-  group by apt_id
-),
-latest1 as (
-  -- 가장 최근 1건의 상세
-  select
-    apt_id,
-    round(price_man::numeric / 10000.0, 2) as latest_price,
-    floor                                  as latest_floor,
-    contract_date                          as latest_contract_date
-  from recent
-  where rn = 1
-),
-yearly as (
-  -- 연간 거래량. 위 recent가 rn <= 3으로 표본을 자르는 것과 달리 12개월치를 다 센다.
-  --
-  -- freshness는 "최근 3건이 얼마나 몰려 있나"만 재기 때문에 거래량 정보가 없다.
-  -- 연 50건인 단지와 연 3건 딱 채운 단지가 똑같이 fresh_high로 나온다.
-  -- 시세를 믿을 만한지 판단하려면 표본 크기 자체가 필요하다.
-  --
-  -- 신고 지연 주의: 계약 후 30일 이내 신고라 최근 한 달은 늘 덜 찬 상태로 잡힌다.
-  -- 그래도 창을 뒤로 미루지 않는다. 모든 단지가 똑같이 영향받아 단지 간 비교는
-  -- 왜곡되지 않고, 미루면 그만큼 최신성을 잃는다.
-  select
-    apt_id,
-    count(*) as deal_count_12m
-  from transactions
-  where contract_date >= current_date - interval '12 months'
-  group by apt_id
-),
-tier_recent as (
-  -- 구간 전체의 최근 거래. 위 recent와 규칙은 같고 파티션만 구간이다.
-  select k.group_id, t.price_man, t.contract_date,
-         row_number() over (partition by k.group_id
-                            order by t.contract_date desc) as rn
-    from transactions t
-    join tier_key k on k.apt_id = t.apt_id
-   where t.contract_date >= current_date - interval '6 months'
-),
-tier_latest3 as (
-  select group_id,
-         round(avg(price_man) / 10000.0, 2) as tier_avg,
-         count(*)           as tier_deal_count,
-         min(contract_date) as tier_oldest
-    from tier_recent
-   where rn <= 3
-   group by group_id
-),
-tier_yearly as (
-  select k.group_id, count(*) as tier_deal_count_12m
-    from transactions t
-    join tier_key k on k.apt_id = t.apt_id
-   where t.contract_date >= current_date - interval '12 months'
-   group by k.group_id
-)
 select
   a.id, a.name, a.sido, a.gu, a.dong, a.address,
   a.area_sqm, a.pyeong, a.year_built, a.hh, a.lat, a.lng, a.created_at,
@@ -275,136 +170,47 @@ select
     when l.deal_count >= 3                                                         then 'fresh_low'   -- 노랑
     else                                                                                'scarce'      -- 주황 (1~2건)
   end as freshness,
-  -- 새 컬럼은 반드시 맨 뒤에 붙인다. create or replace view는 기존 컬럼의
-  -- 이름·순서를 바꾸지 못해서, 중간에 끼우면 운영 배포가 통째로 실패한다.
-  coalesce(y.deal_count_12m, 0)::int as deal_count_12m,
-  -- ── 평형 구간 (위 주석 참고). 행 구조는 그대로 두고 구간 정보를 얹기만 한다 ──
-  tm.tier_min                                       as size_tier,
-  case when ti.lo_py = ti.hi_py then ti.lo_py || '평'
-       else ti.lo_py || '~' || ti.hi_py || '평' end as size_label,
-  coalesce(ty.tier_deal_count_12m, 0)::int          as tier_deal_count_12m,
-  tl.tier_avg                                       as tier_avg_price,
-  case
-    when tl.tier_deal_count >= 3 and tl.tier_oldest >= current_date - interval '1 month'  then 'fresh_high'
-    when tl.tier_deal_count >= 3 and tl.tier_oldest >= current_date - interval '3 months' then 'fresh_mid'
-    when tl.tier_deal_count >= 3                                                          then 'fresh_low'
-    else                                                                                       'scarce'
-  end                                               as tier_freshness
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
 from apts a
-join latest3 l  on l.apt_id  = a.id
-join latest1 l1 on l1.apt_id = a.id
--- 6개월 창이 12개월 안에 들어가므로 yearly는 항상 매칭된다. 그래도 left join으로
--- 두는 이유는 위 창을 나중에 넓혔을 때 단지가 통째로 사라지지 않게 하려는 것이다.
-left join yearly y on y.apt_id = a.id
-join tier_map  tm on tm.apt_id = a.id
-join tier_info ti on (ti.name, ti.gu, ti.dong, ti.tier_min) = (tm.name, tm.gu, tm.dong, tm.tier_min)
-left join tier_latest3 tl on tl.group_id = ti.group_id
-left join tier_yearly  ty on ty.group_id = ti.group_id
-;
--- 6개월 내 거래 0건인 단지는 join에서 자동 제외 → 추천에 안 나옴
+-- 최신 3건 집계
+cross join lateral (
+  select round(avg(r.price_man) / 10000.0, 2) as avg_price,
+         count(*)             as deal_count,
+         max(r.contract_date) as latest_date,
+         min(r.contract_date) as oldest_date
+    from (select t.price_man, t.contract_date
+            from transactions t
+           where t.apt_id = a.id
+             and t.contract_date >= current_date - interval '6 months'
+           order by t.contract_date desc, t.id desc
+           limit 3) r
+) l
+-- 가장 최근 1건의 상세. 0건이면 이 조인에서 행이 사라진다
+-- (기존 `join latest1`과 같은 효과 — 6개월 내 거래 없는 단지는 뷰에 안 나온다).
+cross join lateral (
+  select round(t.price_man::numeric / 10000.0, 2) as latest_price,
+         t.floor                                  as latest_floor,
+         t.contract_date                          as latest_contract_date
+    from transactions t
+   where t.apt_id = a.id
+     and t.contract_date >= current_date - interval '6 months'
+   order by t.contract_date desc, t.id desc
+   limit 1
+) l1
+-- 연간 거래량
+left join lateral (
+  select count(*) as deal_count_12m
+    from transactions t
+   where t.apt_id = a.id
+     and t.contract_date >= current_date - interval '12 months'
+) y on true;
+-- 6개월 내 거래 0건인 단지는 위 latest1 LATERAL에서 행이 사라진다 → 추천에 안 나옴
 
 -- ─── apt_rent_prices 뷰 (전월세) ────────────────────────────────────────────
 -- 매매와 같은 규칙이되 기준 금액은 보증금(억).
 -- 월세·갱신 계약은 rent_transactions에 저장은 하되 이 뷰에서는 제외한다.
 -- (보증금 비교의 기준을 맞추기 위해 '전세' + '신규' 계약만 사용)
 create or replace view apt_rent_prices as
-with tier_map as (
-  select a.id as apt_id, a.name, a.gu, a.dong, x.p,
-         case when x.p >= 20 then (x.p / 4) * 4 else (x.p / 2) * 2 end as tier_min
-    from apts a,
-         lateral (select round(a.area_sqm / (3.3058 * 0.75))::int as p) x
-),
-tier_info as (
-  -- 라벨은 그 단지·구간에 실제로 있는 면적에서 뽑는다. 구간 이름(32~35평)을 그대로 쓰면
-  -- 34평만 있는 단지도 32~35평으로 보여 실제보다 넓게 느껴진다.
-  --
-  -- group_id는 아래 집계들이 쓰는 숫자 그룹 키다. (name, gu, dong, tier_min) 네 컬럼으로
-  -- 직접 파티션하면 텍스트 3개를 정렬해야 해서 윈도 함수가 3.7배 느려진다 (10만 단지
-  -- 기준 11.5초 → 42.3초). apt_id는 정수라 정렬이 훨씬 싸다.
-  select name, gu, dong, tier_min,
-         min(apt_id) as group_id,
-         min(p) as lo_py, max(p) as hi_py
-    from tier_map
-   group by name, gu, dong, tier_min
-),
-tier_key as (
-  select m.apt_id, i.group_id
-    from tier_map m
-    join tier_info i
-      on i.name = m.name and i.gu = m.gu and i.dong = m.dong and i.tier_min = m.tier_min
-),
-recent as (
-  select
-    apt_id,
-    deposit_man,
-    contract_date,
-    row_number() over (partition by apt_id order by contract_date desc) as rn
-  from rent_transactions
-  where deal_type      = '전세'
-    and contract_type  = '신규'
-    and contract_date >= current_date - interval '6 months'
-),
-latest3 as (
-  select
-    apt_id,
-    round(avg(deposit_man) / 10000.0, 2) as avg_deposit,
-    count(*)                             as deal_count,
-    max(contract_date)                   as latest_date,
-    min(contract_date)                   as oldest_date
-  from recent
-  where rn <= 3
-  group by apt_id
-),
-latest1 as (
-  select
-    apt_id,
-    round(deposit_man::numeric / 10000.0, 2) as latest_deposit,
-    contract_date                            as latest_contract_date
-  from recent
-  where rn = 1
-),
-yearly as (
-  -- 연간 거래량 (매매 쪽 yearly 주석 참고).
-  -- 전세·신규만 세는 이유는 이 뷰의 보증금 기준과 표본을 맞추기 위해서다.
-  -- 월세까지 합치면 "이 보증금 시세를 뒷받침하는 거래가 몇 건인가"가 아니게 된다.
-  select
-    apt_id,
-    count(*) as deal_count_12m
-  from rent_transactions
-  where deal_type      = '전세'
-    and contract_type  = '신규'
-    and contract_date >= current_date - interval '12 months'
-  group by apt_id
-),
-tier_recent as (
-  -- 구간 전체의 최근 거래. 위 recent와 규칙은 같고 파티션만 구간이다.
-  select k.group_id, t.deposit_man, t.contract_date,
-         row_number() over (partition by k.group_id
-                            order by t.contract_date desc) as rn
-    from rent_transactions t
-    join tier_key k on k.apt_id = t.apt_id
-   where t.contract_date >= current_date - interval '6 months'
-     and t.deal_type = '전세'
-     and t.contract_type = '신규'
-),
-tier_latest3 as (
-  select group_id,
-         round(avg(deposit_man) / 10000.0, 2) as tier_avg,
-         count(*)           as tier_deal_count,
-         min(contract_date) as tier_oldest
-    from tier_recent
-   where rn <= 3
-   group by group_id
-),
-tier_yearly as (
-  select k.group_id, count(*) as tier_deal_count_12m
-    from rent_transactions t
-    join tier_key k on k.apt_id = t.apt_id
-   where t.contract_date >= current_date - interval '12 months'
-     and t.deal_type = '전세'
-     and t.contract_type = '신규'
-   group by k.group_id
-)
 select
   a.id, a.name, a.sido, a.gu, a.dong, a.address,
   a.area_sqm, a.pyeong, a.year_built, a.hh, a.lat, a.lng, a.created_at,
@@ -420,27 +226,38 @@ select
     when l.deal_count >= 3                                                         then 'fresh_low'
     else                                                                                'scarce'
   end as freshness,
-  -- 새 컬럼은 반드시 맨 뒤에 붙인다. create or replace view는 기존 컬럼의
-  -- 이름·순서를 바꾸지 못해서, 중간에 끼우면 운영 배포가 통째로 실패한다.
-  coalesce(y.deal_count_12m, 0)::int as deal_count_12m,
-  -- ── 평형 구간 (위 주석 참고). 행 구조는 그대로 두고 구간 정보를 얹기만 한다 ──
-  tm.tier_min                                       as size_tier,
-  case when ti.lo_py = ti.hi_py then ti.lo_py || '평'
-       else ti.lo_py || '~' || ti.hi_py || '평' end as size_label,
-  coalesce(ty.tier_deal_count_12m, 0)::int          as tier_deal_count_12m,
-  tl.tier_avg                                       as tier_avg_price,
-  case
-    when tl.tier_deal_count >= 3 and tl.tier_oldest >= current_date - interval '1 month'  then 'fresh_high'
-    when tl.tier_deal_count >= 3 and tl.tier_oldest >= current_date - interval '3 months' then 'fresh_mid'
-    when tl.tier_deal_count >= 3                                                          then 'fresh_low'
-    else                                                                                       'scarce'
-  end                                               as tier_freshness
+  coalesce(y.deal_count_12m, 0)::int as deal_count_12m
 from apts a
-join latest3 l  on l.apt_id  = a.id
-join latest1 l1 on l1.apt_id = a.id
-left join yearly y on y.apt_id = a.id
-join tier_map  tm on tm.apt_id = a.id
-join tier_info ti on (ti.name, ti.gu, ti.dong, ti.tier_min) = (tm.name, tm.gu, tm.dong, tm.tier_min)
-left join tier_latest3 tl on tl.group_id = ti.group_id
-left join tier_yearly  ty on ty.group_id = ti.group_id
-;
+cross join lateral (
+  select round(avg(r.deposit_man) / 10000.0, 2) as avg_deposit,
+         count(*)             as deal_count,
+         max(r.contract_date) as latest_date,
+         min(r.contract_date) as oldest_date
+    from (select t.deposit_man, t.contract_date
+            from rent_transactions t
+           where t.apt_id = a.id
+             and t.deal_type     = '전세'
+             and t.contract_type = '신규'
+             and t.contract_date >= current_date - interval '6 months'
+           order by t.contract_date desc, t.id desc
+           limit 3) r
+) l
+cross join lateral (
+  select round(t.deposit_man::numeric / 10000.0, 2) as latest_deposit,
+         t.contract_date                            as latest_contract_date
+    from rent_transactions t
+   where t.apt_id = a.id
+     and t.deal_type     = '전세'
+     and t.contract_type = '신규'
+     and t.contract_date >= current_date - interval '6 months'
+   order by t.contract_date desc, t.id desc
+   limit 1
+) l1
+left join lateral (
+  select count(*) as deal_count_12m
+    from rent_transactions t
+   where t.apt_id = a.id
+     and t.deal_type     = '전세'
+     and t.contract_type = '신규'
+     and t.contract_date >= current_date - interval '12 months'
+) y on true;
