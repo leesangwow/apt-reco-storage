@@ -1,0 +1,54 @@
+name: 수집 실패 시 자동 재시도
+
+# 주 2회(월·목) 스케줄에서 한 번 실패하면 다음 회차까지 3~4일이 빈다.
+# 지금까지 실패는 전부 국토부 사이트가 잠깐 응답하지 않은 것이었고
+# (2026-08-06 새벽 ERR_CONNECTION_TIMED_OUT 32건, 2026-08-09 낮 3지역 연속 실패),
+# 몇 시간 뒤 같은 코드로 돌리면 그냥 성공했다. 사람이 알아채기를 기다릴 이유가 없다.
+on:
+  workflow_run:
+    workflows: ['실거래가 CSV 자동 수집']
+    types: [completed]
+
+jobs:
+  retry:
+    # 예약 실행이 실패했을 때만 움직인다.
+    # 수동 실행(관리자 페이지 버튼 포함)은 사람이 보고 있으니 맡기고,
+    # 이 조건이 재시도가 재시도를 부르는 고리도 함께 막는다
+    # — 아래에서 띄우는 실행의 event는 workflow_dispatch라 여기에 걸리지 않는다.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    # 대기 시간 + 여유. 재수집 자체는 별도 실행이라 여기서 기다리지 않는다.
+    timeout-minutes: 120
+
+    steps:
+      # 실패 직후 바로 다시 두드리면 같은 이유로 또 죽는다. 사이트가 돌아올 시간을 준다.
+      # 8/6 장애는 약 2시간 이어졌고, 8/9은 3시간 뒤 정상이었다.
+      - name: 사이트 회복 대기 (90분)
+        run: sleep 5400
+
+      # GITHUB_TOKEN으로는 다른 워크플로를 띄울 수 없다 (무한 루프 방지 정책).
+      # 관리자 페이지가 쓰는 것과 같은 fine-grained PAT을 저장소 시크릿으로 둔다.
+      - name: 재수집 실행
+        env:
+          GH_TOKEN: ${{ secrets.COLLECT_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "COLLECT_DISPATCH_TOKEN 시크릿이 없어 재시도를 건너뜁니다." >&2
+            exit 1
+          fi
+          gh workflow run auto-collect.yml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.event.workflow_run.head_branch }}" \
+            -f type=all \
+            -f regions=
+
+      - name: 요약
+        if: always()
+        run: |
+          {
+            echo "### 자동 재시도"
+            echo "- 실패한 실행: ${{ github.event.workflow_run.html_url }}"
+            echo "- 90분 대기 후 전체 재수집을 요청했습니다."
+          } >> "$GITHUB_STEP_SUMMARY"
