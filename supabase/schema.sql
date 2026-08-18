@@ -60,6 +60,11 @@ create table if not exists transactions (
 );
 
 -- ─── 전월세 실거래 ──────────────────────────────────────────────────────────
+-- 전세·신규 계약만 들어온다 (2026-08-18~). 아래 apt_rent_prices가 그 조건으로
+-- 거르기 때문에 월세·갱신은 저장 비용만 내고 한 번도 읽히지 않았다. 운영에서
+-- 전월세 110만 행 중 60%가 그런 행이었고 인덱스까지 133MB였다.
+-- 컬럼(monthly_man, contract_type)은 남겨 둔다 — 되살릴 때 스키마를 안 건드리게.
+-- 자세한 경위와 되돌리는 법: supabase/migrations/2026-08-18_rent_jeonse_only.sql
 create table if not exists rent_transactions (
   id              bigserial primary key,
   apt_id          bigint references apts(id) on delete cascade,
@@ -154,6 +159,7 @@ alter table ingestion_runs enable row level security;
 -- 관리자 페이지의 "데이터 자체가 신선한가" 쪽 지표.
 -- 적재가 언제 돌았는지는 ingestion_runs가 갖고 있으므로 여기서는
 -- 데이터 자체의 최신성(최신 계약일)과 규모만 본다.
+-- rent 쪽 건수는 2026-08-18부터 "전세·신규 계약 수"라는 뜻이다 (위 테이블 주석 참고).
 create or replace view region_data_stats as
   select 'buy'::text as deal_type, a.sido,
          count(*)::bigint     as tx_count,
@@ -456,6 +462,14 @@ create index if not exists apt_rent_prices_mv_complex
 create extension if not exists pg_trgm;
 create index if not exists apt_prices_mv_name_trgm
   on apt_prices_mv using gin (name gin_trgm_ops);
+
+-- ─── 보존 기간 ──────────────────────────────────────────────────────────────
+-- 수집 창이 롤링 1년이라는 건 "다시 받아오는 범위"일 뿐이라, 예전에는 계약일이
+-- 1년을 넘긴 행이 계속 쌓여 연 420MB씩 늘었다. 이제 수집 워크플로가 매 회차
+-- scripts/prune_old.py로 13개월 바깥을 지운다. 뷰가 최근 12개월까지만 보므로
+-- 화면의 값은 달라지지 않는다.
+-- ⚠ 과거분 적재(backfill.yml)와 충돌한다. 과거 거래를 쌓으려면 워크플로에서
+--   그 단계를 빼야 한다.
 
 -- ─── 접근 권한 (RLS · grant) ────────────────────────────────────────────────
 -- Supabase는 public 스키마의 테이블을 PostgREST로 자동 공개하고 anon·authenticated에

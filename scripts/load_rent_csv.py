@@ -1,6 +1,8 @@
 """
 국토부 아파트 전월세 CSV → Supabase 적재 스크립트
 
+⚠ 전세·신규 계약만 적재한다. 이유는 preprocess()의 필터 주석 참고.
+
 사용법:
   python scripts/load_rent_csv.py --dir ./data/updates/rent
   python scripts/load_rent_csv.py --dir ./data/updates/rent --keep-csv   # CSV 보존
@@ -111,6 +113,18 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     # 아파트만
     if "주택유형" in df.columns:
         df = df[df["주택유형"].str.strip() == "아파트"]
+
+    # 전세·신규만 넣는다.
+    #
+    # apt_rent_prices 뷰가 deal_type='전세' and contract_type='신규'로 거르기 때문에
+    # 월세와 갱신 계약은 저장·색인 비용만 내고 한 번도 읽히지 않는다. 운영 실측으로
+    # 전월세 110만 행 중 그런 행이 약 60%였고 인덱스까지 133MB였다. 무료 플랜
+    # 500MB에서 그 비용을 낼 이유가 없어 2026-08-18에 적재를 끊었다.
+    #
+    # 되살리려면 이 한 줄을 지우면 된다. 다만 그때 과거분은 국토부의 366일 제한
+    # 안에 있는 것만 backfill.yml로 다시 받을 수 있다.
+    # (계약구분이 비어 있는 행은 신규 비교에서 걸러진다 — 뷰의 판정과 같다)
+    df = df[(df["deal_type"] == "전세") & (df["contract_type"] == "신규")]
 
     df = df.dropna(subset=["area_sqm", "deposit_man", "contract_date", "name", "gu", "dong"])
     return df
