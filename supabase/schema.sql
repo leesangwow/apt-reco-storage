@@ -93,12 +93,17 @@ create unique index if not exists transactions_unique
 -- rent_transactions의 유니크 제약은 위 create table 안에 정의되어 있다.
 
 -- ─── 조회 인덱스 ────────────────────────────────────────────────────────────
-create index if not exists idx_transactions_apt_id            on transactions(apt_id);
-create index if not exists idx_transactions_contract_date     on transactions(contract_date desc);
-create index if not exists idx_rent_transactions_apt_id       on rent_transactions(apt_id);
-create index if not exists idx_rent_transactions_contract_date on rent_transactions(contract_date desc);
-create index if not exists idx_apts_gu   on apts(gu);
-create index if not exists idx_apts_dong on apts(dong);
+-- apt_id·contract_date 단독 인덱스와 apts의 gu·dong 인덱스는 2026-08-18에 지웠다
+-- (supabase/migrations/2026-08-18_reclaim_space.sql). 합쳐서 37MB를 쓰면서 하는 일이
+-- 없었다 — apt_id는 유니크 제약의 선두 컬럼이라 그쪽이 그대로 받고, contract_date
+-- 단독으로 좁히는 질의는 이 스키마에 없으며, apts를 gu·dong으로만 찾는 곳도 없다.
+-- 다시 필요해지면 아래를 되살리면 된다.
+--   create index idx_transactions_apt_id             on transactions(apt_id);
+--   create index idx_transactions_contract_date      on transactions(contract_date desc);
+--   create index idx_rent_transactions_apt_id        on rent_transactions(apt_id);
+--   create index idx_rent_transactions_contract_date on rent_transactions(contract_date desc);
+--   create index idx_apts_gu   on apts(gu);
+--   create index idx_apts_dong on apts(dong);
 
 -- apt_rent_prices의 LATERAL들이 전부 "이 단지의 전세·신규 계약을 최신순으로"를 묻는다.
 -- 유니크 인덱스로는 apt_id·contract_date까지만 좁혀지고 deal_type·contract_type은 힙에서

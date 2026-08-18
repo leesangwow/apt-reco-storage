@@ -1,0 +1,122 @@
+-- 용량 회수 — 무료 플랜 500MB 상한을 넘긴 상태(604MB)에서의 조치
+--
+-- ─── 왜 이렇게 됐나 ────────────────────────────────────────────────────────
+-- 수집 창은 롤링 1년이지만 그건 "다시 받아오는 범위"일 뿐이고, DB에서 지우는 것은
+-- 아무것도 없다. 계약일이 1년을 넘긴 행도 그대로 남아 계속 쌓인다.
+-- 실측 기준 한 해에 약 420MB씩 늘어난다 (매매 133MB + 전월세 287MB).
+-- 즉 과거분을 넣지 않아도 무료 플랜 상한은 계속 넘게 되어 있다.
+--
+-- ─── 어디가 큰가 ───────────────────────────────────────────────────────────
+-- 550MB(관계 합계) 중 인덱스가 314MB로 57%다. 그래서 회수도 인덱스에서 나온다.
+-- 운영과 같은 행수(단지 12.8만, 매매 61만, 전월세 110만)로 로컬 PostgreSQL 16에
+-- 스키마를 그대로 올려 실측한 값이 아래 각 단계에 적혀 있다.
+
+-- ─── 0단계: 실행 전에 확인 ─────────────────────────────────────────────────
+-- 아래 두 질의를 먼저 돌려 이 마이그레이션의 전제가 맞는지 본다.
+--
+-- (가) 인덱스별 크기와 사용 횟수. idx_scan이 0이면 아무도 안 쓴다는 뜻이다.
+--      (통계는 마지막 pg_stat_reset() 이후 누적이다)
+--
+--   select i.relname as 인덱스, pg_size_pretty(pg_relation_size(i.oid)) as 크기,
+--          s.idx_scan as 사용횟수
+--     from pg_class i
+--     join pg_stat_user_indexes s on s.indexrelid = i.oid
+--    where i.relnamespace = 'public'::regnamespace
+--    order by pg_relation_size(i.oid) desc;
+--
+-- (나) 인덱스가 얼마나 성기게 차 있나. 잎 밀도가 90%면 꽉 찬 상태다.
+--
+--   create extension if not exists pgstattuple;
+--   select i.relname as 인덱스, pg_size_pretty(pg_relation_size(i.oid)) as 크기,
+--          round((s).avg_leaf_density::numeric, 1) as 잎_밀도
+--     from pg_class i
+--     join pg_am am on am.oid = i.relam
+--     cross join lateral (select pgstatindex(i.oid) as s) t
+--    where i.relnamespace = 'public'::regnamespace and i.relkind = 'i'
+--      and am.amname = 'btree' and pg_relation_size(i.oid) > 1000000
+--    order by pg_relation_size(i.oid) desc;
+
+-- ─── 1단계: 아무도 안 쓰는 인덱스 삭제 (실측 -37MB) ────────────────────────
+-- 공간을 만들 필요 없이 파일이 바로 사라지므로 제일 먼저 한다. 되돌리려면
+-- schema.sql의 정의를 그대로 다시 실행하면 된다.
+--
+-- apt_id 단독 인덱스 둘은 유니크 제약과 선두 컬럼이 겹쳐 하는 일이 없다.
+-- 유니크 제약이 (apt_id, ...)로 시작하므로 apt_id 조회는 그쪽이 그대로 받는다.
+-- 삭제 후 explain으로 확인함: 매매는 transactions_unique, 전월세는
+-- idx_rent_tx_jeonse를 타고 0.1ms 안에 끝난다.
+drop index if exists idx_rent_transactions_apt_id;         -- 13MB
+drop index if exists idx_transactions_apt_id;              -- 11MB
+
+-- contract_date 단독 인덱스 둘은 이 스키마의 어떤 질의도 쓰지 않는다.
+-- 뷰의 LATERAL은 전부 apt_id로 먼저 좁힌 뒤 날짜를 보고(복합 인덱스가 처리한다),
+-- region_data_stats의 max(contract_date)는 어차피 전수 집계다.
+drop index if exists idx_rent_transactions_contract_date;  -- 7.4MB
+drop index if exists idx_transactions_contract_date;       -- 4.3MB
+
+-- apts를 gu·dong으로만 좁히는 질의는 남아 있지 않다. 앱은 matview를 읽고,
+-- 뷰가 apts를 찾을 때는 (name, gu, dong, size_tier)로 찾아 complex_tier가 받는다.
+drop index if exists idx_apts_gu;                          -- 1.2MB
+drop index if exists idx_apts_dong;                        -- 1.4MB
+
+-- ─── 2단계: 큰 인덱스 다시 만들기 (실측 -50MB) ─────────────────────────────
+-- ⚠ 아래는 이 파일을 통째로 실행하지 말고 한 줄씩 돌릴 것. 새 인덱스를 옆에 지은
+--   뒤 바꿔치기하므로 그동안 원본만큼의 여유 공간이 필요하다. 이미 상한을 넘긴
+--   상태이니 작은 것부터 올라가며 공간을 벌어 나간다.
+--
+-- 왜 필요한가: 적재가 지역별로 들어와 인덱스 키 순서와 무관하게 꽂히기 때문에
+-- 잎 페이지가 60~65%만 차 있다. 갓 만든 DB에서도 그렇다(= 이건 쓰레기가 쌓인
+-- 것이 아니라 btree가 페이지를 쪼갠 자국이다). 다시 만들면 90%로 채워진다.
+--   rent_transactions의 유니크 제약  76MB → 52MB  (밀도 61.7% → 90%)
+--   idx_rent_tx_jeonse               35MB → 24MB  (59.9% → 90%)
+--   transactions_unique              33MB → 24MB  (64.3% → 90%)
+--   idx_apts_complex_tier            14MB → 11MB  (74.7% → 90%)
+--   apts_name_gu_dong_area_sqm_key   13MB → 11MB  (73.5% → 90%)
+--
+-- concurrently는 읽기·쓰기를 막지 않는다. 대신 트랜잭션 밖에서 돌아야 하므로
+-- SQL Editor에서 한 문장씩 실행한다.
+--
+-- reindex index concurrently apts_name_gu_dong_area_sqm_key;
+-- reindex index concurrently idx_apts_complex_tier;
+-- reindex index concurrently transactions_unique;
+-- reindex index concurrently idx_rent_tx_jeonse;
+-- reindex index concurrently rent_transactions_apt_id_contract_date_deposit_man_monthly__key;
+
+-- ─── 3단계: 여기서 멈출지 더 갈지 ──────────────────────────────────────────
+-- 1~2단계로 실측 기준 약 87MB(17%)가 준다. 604MB → 약 500MB로 상한선에 겨우
+-- 닿는 수준이라, 이것만으로는 다음 회차부터 다시 넘는다. 아래 둘 중 하나가 필요하다.
+--
+-- (가) 앱이 안 보는 전월세를 버린다 (실측 약 -147MB)
+--      apt_rent_prices는 '전세' + '신규'만 본다. 월세와 갱신 계약은 저장만 되고
+--      어디에서도 읽히지 않는다. 지우기 전에 비중부터 확인할 것:
+--
+--        select deal_type, contract_type, count(*)
+--          from rent_transactions group by 1, 2 order by 3 desc;
+--
+--      버리기로 했다면 load_rent_csv.py에서 아예 안 넣도록 같이 고쳐야 한다.
+--      안 그러면 다음 적재에서 그대로 다시 들어온다.
+--      되돌리기: 국토부 사이트에 원본이 있으나 시도별 조회가 366일까지라
+--      1년 넘은 것은 다시 못 받는다.
+--
+--        delete from rent_transactions
+--         where deal_type <> '전세' or contract_type is distinct from '신규';
+--
+-- (나) 보존 기간을 정한다 (지금은 0행, 앞으로의 증가를 0으로 묶는다)
+--      뷰가 최근 12개월만 보므로 13개월을 넘긴 거래는 앱에 아무 영향이 없다.
+--      지금 DB에는 딱 1년치만 있어 지워질 것이 없지만, 이걸 넣지 않으면
+--      반년 뒤에 같은 문제를 다시 만난다.
+--
+--        delete from transactions      where contract_date < current_date - interval '13 months';
+--        delete from rent_transactions where contract_date < current_date - interval '13 months';
+--        -- 거래가 하나도 안 남은 단지도 함께 정리한다
+--        delete from apts a
+--         where not exists (select 1 from transactions      t where t.apt_id = a.id)
+--           and not exists (select 1 from rent_transactions r where r.apt_id = a.id);
+--
+--      ⚠ (나)는 과거분 적재와 정면으로 충돌한다. 보존 정책을 넣으면 backfill로
+--        넣은 과거 거래가 다음 정리 때 지워진다. 둘 중 하나만 고를 수 있다.
+--
+-- ⚠ delete는 공간을 곧바로 돌려주지 않는다. 지운 자리는 다음 적재가 재사용하므로
+--   대개는 그걸로 충분하고, OS까지 돌려받아야 하면 vacuum full이 필요하다.
+--   vacuum full은 테이블 크기만큼 여유 공간을 쓰고 그동안 그 테이블을 통째로
+--   잠근다 — 상한을 넘긴 상태에서 제일 큰 테이블에 걸면 실패할 수 있으니
+--   1~2단계로 공간을 먼저 만든 뒤에 할 것.
