@@ -451,3 +451,32 @@ create index if not exists apt_rent_prices_mv_complex
 create extension if not exists pg_trgm;
 create index if not exists apt_prices_mv_name_trgm
   on apt_prices_mv using gin (name gin_trgm_ops);
+
+-- ─── 접근 권한 (RLS · grant) ────────────────────────────────────────────────
+-- Supabase는 public 스키마의 테이블을 PostgREST로 자동 공개하고 anon·authenticated에
+-- 기본으로 전 권한을 준다. anon 키는 브라우저 번들에 그대로 실려 나가므로, RLS를
+-- 켜지 않으면 화면을 연 사람이면 누구나 rest/v1로 삭제·수정까지 할 수 있다.
+-- (2026-08 Supabase 보안 경고 rls_disabled_in_public. supabase/migrations/2026-08-18_rls.sql)
+--
+-- 정책은 두지 않는다 — 정책이 없으면 anon·authenticated는 전부 차단된다.
+-- 앱은 이 테이블들을 직접 읽지 않고(조회는 아래 matview, 관리자 화면은 service_role),
+-- 적재 스크립트는 postgres 역할로 직접 접속한다. 테이블 소유자는 RLS 대상이 아니므로
+-- 적재도 matview 갱신도 그대로 돈다.
+alter table apts              enable row level security;
+alter table transactions      enable row level security;
+alter table rent_transactions enable row level security;
+-- ingestion_runs는 위쪽 정의 옆에서 이미 켠다.
+
+-- 뷰는 소유자 권한으로 실행되어 RLS로 막히지 않고, matview는 RLS 자체가 없다.
+-- 그래서 뷰 쪽은 grant로 정리한다.
+-- apt_prices / apt_rent_prices는 앱이 쓰지 않는다(앱은 _mv만 읽는다). 열어 두면
+-- 조회 한 번에 전국 집계를 다시 도는 질의를 아무나 반복해 때릴 수 있다.
+revoke all on apt_prices        from anon, authenticated;
+revoke all on apt_rent_prices   from anon, authenticated;
+revoke all on region_data_stats from anon, authenticated;  -- 관리자 전용, service_role로만 읽는다
+
+-- matview 두 개만 anon에게 읽기로 열어 둔다.
+revoke all on apt_prices_mv      from anon, authenticated;
+revoke all on apt_rent_prices_mv from anon, authenticated;
+grant select on apt_prices_mv      to anon, authenticated;
+grant select on apt_rent_prices_mv to anon, authenticated;
