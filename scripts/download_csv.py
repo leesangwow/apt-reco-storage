@@ -16,6 +16,9 @@
   # 실패한 지역만 재실행
   python scripts/download_csv.py --list-regions
   python scripts/download_csv.py --region gyeonggi,seoul
+
+  # 과거분 수집 (기간 지정, 한 번에 최대 366일)
+  python scripts/download_csv.py --from 2024-08-19 --to 2025-08-18
 """
 
 import argparse
@@ -48,9 +51,12 @@ XLS_URL = "https://rt.molit.go.kr/pt/xls/xls.do?mobileAt="
 # 전년 12월 계약분이 1월에 신고될 때 어떤 실행의 수집 범위에도 안 들어와 영구 누락된다.
 # 롤링 1년 창으로 잡으면 지연 신고분이 다음 주 실행에서 다시 걸린다.
 # (사이트 제한: 시도별 조회는 최대 366일)
-_TODAY     = datetime.now()
-START_DATE = (_TODAY - timedelta(days=365)).strftime("%Y-%m-%d")
-END_DATE   = _TODAY.strftime("%Y-%m-%d")
+# 과거분 적재(backfill)는 --from/--to로 창을 옮겨 1년씩 끊어 받는다.
+# 사이트가 366일을 넘는 시도별 조회를 거부하므로 한 번에 여러 해를 받을 수는 없다.
+_TODAY        = datetime.now()
+DEFAULT_START = (_TODAY - timedelta(days=365)).strftime("%Y-%m-%d")
+DEFAULT_END   = _TODAY.strftime("%Y-%m-%d")
+MAX_SPAN_DAYS = 366
 
 # 저장 경로
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -119,6 +125,7 @@ async def download_one(
     sido_code: str,
     save_path: Path,
     alerts: list,
+    period: tuple[str, str],
     debug: bool = False,
 ):
     """한 지역·한 거래유형의 CSV 다운로드"""
@@ -146,8 +153,9 @@ async def download_one(
         await page.screenshot(path=screenshot_path("02_deal", region_key))
 
     # ── 3. 시작일 / 종료일 설정 (type=date, 형식: YYYY-MM-DD) ─────
-    await page.fill("#srhFromDt", START_DATE)
-    await page.fill("#srhToDt",   END_DATE)
+    start_date, end_date = period
+    await page.fill("#srhFromDt", start_date)
+    await page.fill("#srhToDt",   end_date)
 
     if debug:
         await page.screenshot(path=screenshot_path("03_date", region_key))
@@ -244,8 +252,17 @@ async def diagnose(headless: bool = False):
         print("\n확인 후 SELECTORS 딕셔너리를 업데이트하세요.")
 
 
-async def run(deal_types: list, headless: bool, debug: bool, only: set | None = None):
+async def run(
+    deal_types: list,
+    headless: bool,
+    debug: bool,
+    only: set | None = None,
+    period: tuple[str, str] = (DEFAULT_START, DEFAULT_END),
+    tag: str | None = None,
+):
+    """tag: 과거분 수집일 때 파일명·이력에 붙일 꼬리표 (예: '2023')."""
     run_log = RunLogger()
+    start_date, end_date = period
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -287,27 +304,32 @@ async def run(deal_types: list, headless: bool, debug: bool, only: set | None = 
                 count = sum(1 for job in jobs if job[0] == deal_type)
                 print(
                     f"\n[{DEAL_LABEL[deal_type]}] {count}개 지역 수집 시작"
-                    f" ({START_DATE} ~ {END_DATE})"
+                    f" ({start_date} ~ {end_date})"
                 )
 
             save_dir = BUY_DIR if deal_type == "buy" else RENT_DIR
-            # 롤링 1년 창이라 연도를 파일명에 넣지 않는다.
+            # 정기 수집은 롤링 1년 창이라 연도를 파일명에 넣지 않는다.
             # (연도를 넣으면 해가 바뀔 때 옛 파일이 남아 매 실행마다 불필요하게 재적재된다)
-            save_path = save_dir / f"{region_key}.csv"
+            #
+            # 과거분은 반대로 꼬리표가 있어야 한다. 로더가 파일명을 그대로
+            # ingestion_runs.region_key로 쓰기 때문에, 꼬리표가 없으면 과거분 실행이
+            # /admin의 "이 지역 최신 상태"를 덮어써 3년 전 기간이 현황으로 보인다.
+            file_key  = f"{region_key}_{tag}" if tag else region_key
+            save_path = save_dir / f"{file_key}.csv"
 
             # 국토부 서버는 조회량이 많으면 응답이 크게 느려진다.
             # 일시적 지연으로 한 지역이 통째로 빠지지 않도록 재시도한다.
             try:
-                with run_log.track("download", deal_type, region_key) as entry:
-                    entry.from_date = START_DATE
-                    entry.to_date   = END_DATE
+                with run_log.track("download", deal_type, file_key) as entry:
+                    entry.from_date = start_date
+                    entry.to_date   = end_date
 
                     for attempt in range(1, MAX_ATTEMPTS + 1):
                         entry.attempts = attempt
                         try:
                             await download_one(
                                 page, deal_type, region_key, sido_code,
-                                save_path, alerts, debug,
+                                save_path, alerts, period, debug,
                             )
                             entry.file_bytes = save_path.stat().st_size
                             await asyncio.sleep(BETWEEN_REGIONS_SEC)
@@ -361,6 +383,51 @@ async def run(deal_types: list, headless: bool, debug: bool, only: set | None = 
         print("\n모든 다운로드 완료")
 
 
+def resolve_period(from_date: str | None, to_date: str | None) -> tuple[tuple[str, str], str | None]:
+    """수집 기간과 꼬리표를 정한다.
+
+    둘 다 비어 있으면 정기 수집의 롤링 1년 창을 그대로 쓰고 꼬리표는 없다.
+    기간을 직접 준 경우에만 시작 연도를 꼬리표로 삼아 파일명·이력을 갈라 놓는다
+    (이유는 run() 안 save_path 주석 참고).
+
+    잘못된 기간으로 32개 지역을 다 돌고 나서야 비어 있는 것을 알게 되는 일이 없도록
+    여기서 끊는다. 사이트는 366일이 넘으면 alert만 띄우고 빈손으로 끝난다.
+    """
+    if from_date is None and to_date is None:
+        return (DEFAULT_START, DEFAULT_END), None
+    if from_date is None or to_date is None:
+        print("--from과 --to는 함께 지정해야 합니다")
+        sys.exit(2)
+
+    try:
+        start = datetime.strptime(from_date, "%Y-%m-%d")
+        end   = datetime.strptime(to_date,   "%Y-%m-%d")
+    except ValueError:
+        print("기간은 YYYY-MM-DD 형식이어야 합니다 (예: --from 2024-08-19 --to 2025-08-18)")
+        sys.exit(2)
+
+    if end <= start:
+        print(f"종료일이 시작일보다 뒤여야 합니다: {from_date} ~ {to_date}")
+        sys.exit(2)
+
+    span = (end - start).days + 1
+    if span > MAX_SPAN_DAYS:
+        print(
+            f"조회 기간이 {span}일입니다. 사이트가 시도별 조회를 {MAX_SPAN_DAYS}일까지만"
+            f" 허용하므로 1년씩 끊어서 실행하세요."
+        )
+        sys.exit(2)
+
+    # 0을 채워 정규화한다. strptime은 '2024-8-19'도 받아주지만 사이트의 date input에
+    # 그대로 넣으면 값이 들어가지 않아, 엉뚱한 기간으로 32개 지역을 받게 된다.
+    from_date = start.strftime("%Y-%m-%d")
+    to_date   = end.strftime("%Y-%m-%d")
+
+    tag = start.strftime("%Y")
+    print(f"기간 지정 수집: {from_date} ~ {to_date} ({span}일, 꼬리표 '{tag}')")
+    return (from_date, to_date), tag
+
+
 def main():
     parser = argparse.ArgumentParser(description="국토부 실거래가 CSV 자동 다운로드")
     parser.add_argument(
@@ -388,6 +455,14 @@ def main():
         "--list-regions", action="store_true",
         help="수집 대상 지역 키 목록 출력",
     )
+    parser.add_argument(
+        "--from", dest="from_date", default=None, metavar="YYYY-MM-DD",
+        help=f"수집 시작일 (기본: {DEFAULT_START}). --to와 함께 쓴다",
+    )
+    parser.add_argument(
+        "--to", dest="to_date", default=None, metavar="YYYY-MM-DD",
+        help=f"수집 종료일 (기본: {DEFAULT_END})",
+    )
     args = parser.parse_args()
 
     if args.list_regions:
@@ -413,8 +488,10 @@ def main():
             sys.exit(2)
         print(f"지역 한정 수집: {', '.join(sorted(only))}")
 
+    period, tag = resolve_period(args.from_date, args.to_date)
+
     deal_types = ["buy", "rent"] if args.type == "all" else [args.type]
-    asyncio.run(run(deal_types, headless, args.debug, only))
+    asyncio.run(run(deal_types, headless, args.debug, only, period, tag))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,158 @@
+name: 과거 실거래가 수집 (기간 지정)
+
+# 정기 수집(auto-collect)은 항상 "오늘부터 1년 전"만 본다. 그보다 오래된 거래를
+# 넣으려면 창을 뒤로 옮겨 한 해씩 받아야 한다. 사이트가 시도별 조회를 366일까지만
+# 허용하기 때문에 여러 해를 한 번에 받는 방법은 없다.
+#
+# 쓰는 법 — 최근 연도부터 거꾸로, 한 번에 한 해씩 손으로 돌린다:
+#   2024-08-19 ~ 2025-08-18   (정기 수집이 덮는 창 바로 앞)
+#   2023-08-19 ~ 2024-08-18
+#   ...
+# 한 회차가 최대 3시간이라 여러 해를 자동으로 이어 돌리지 않는다. 국토부 서버가
+# 연속 대량 조회에 느려지는 것도 있고, 한 해씩 넣고 용량을 보면서 멈출 수 있어야 한다.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '수집 시작일 (YYYY-MM-DD)'
+        required: true
+        type: string
+      to:
+        description: '수집 종료일 (YYYY-MM-DD, 시작일로부터 366일 이내)'
+        required: true
+        type: string
+      type:
+        description: '수집 유형'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, buy, rent]
+      regions:
+        description: '특정 지역만 (쉼표 구분, 비우면 전체). 예: gyeonggi,seoul'
+        required: false
+        default: ''
+        type: string
+      refresh_views:
+        description: '조회 뷰 갱신 (과거분만 넣었다면 불필요 — 아래 주석 참고)'
+        required: false
+        default: false
+        type: boolean
+
+# 정기 수집과 같은 그룹. 같은 DB에 두 적재가 동시에 들어가지 않도록,
+# 수집이 돌고 있으면 끝날 때까지 기다린다.
+concurrency:
+  group: auto-collect
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+
+    env:
+      COLLECT_TYPE:    ${{ inputs.type }}
+      COLLECT_REGIONS: ${{ inputs.regions }}
+      COLLECT_FROM:    ${{ inputs.from }}
+      COLLECT_TO:      ${{ inputs.to }}
+      SUPABASE_DB_HOST:     ${{ secrets.SUPABASE_DB_HOST }}
+      SUPABASE_DB_PORT:     ${{ secrets.SUPABASE_DB_PORT }}
+      SUPABASE_DB_NAME:     ${{ secrets.SUPABASE_DB_NAME }}
+      SUPABASE_DB_USER:     ${{ secrets.SUPABASE_DB_USER }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: 의존성 설치
+        run: pip install -r scripts/requirements.txt
+
+      - name: Playwright 브라우저 캐시
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scripts/requirements.txt') }}
+
+      - name: Playwright Chromium 설치
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            playwright install-deps chromium
+          else
+            playwright install chromium --with-deps
+          fi
+
+      # ── 1단계: 지정한 기간의 CSV 다운로드 ──────────────────────────
+      # 기간 검증(형식·366일 초과·역순)은 스크립트가 32개 지역을 돌기 전에 끊는다.
+      # 기간을 주면 파일명이 seoul_2024.csv처럼 갈라져, 이 실행의 이력이 /admin의
+      # "지역별 최신 상태"를 덮어쓰지 않는다.
+      - name: CSV 다운로드
+        run: |
+          if [ -n "$COLLECT_REGIONS" ]; then
+            python scripts/download_csv.py --type "$COLLECT_TYPE" --region "$COLLECT_REGIONS" \
+              --from "$COLLECT_FROM" --to "$COLLECT_TO" --debug
+          else
+            python scripts/download_csv.py --type "$COLLECT_TYPE" \
+              --from "$COLLECT_FROM" --to "$COLLECT_TO" --debug
+          fi
+
+      - name: 실패 시 스크린샷 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-debug-screenshots
+          path: debug_*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # 이름을 정기 수집과 맞춰 둔다. 적재만 다시 돌려야 할 때
+      # load-from-artifact 워크플로를 이 실행 ID로 그대로 쓸 수 있다.
+      - name: CSV artifact 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collected-csv
+          path: data/updates/**/*.csv
+          retention-days: 14
+          compression-level: 9
+          if-no-files-found: warn
+
+      - name: 수집 요약
+        if: always()
+        run: |
+          {
+            echo "### 과거분 수집 ($COLLECT_FROM ~ $COLLECT_TO)"
+            echo '```'
+            du -sh data/updates/buy data/updates/rent 2>/dev/null || true
+            echo "CSV 파일 수: $(find data/updates -name '*.csv' | wc -l)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 2단계: 적재 ────────────────────────────────────────────────
+      # 재적재는 안전하다 — 두 로더 모두 on conflict do nothing이라 정기 수집과
+      # 기간이 겹쳐도 중복 행이 생기지 않고 rows_new만 0에 가깝게 나온다.
+      - name: Supabase 적재 (매매)
+        if: ${{ !cancelled() && inputs.type != 'rent' }}
+        run: python scripts/load_csv.py --dir ./data/updates/buy
+
+      - name: Supabase 적재 (전월세)
+        if: ${{ !cancelled() && inputs.type != 'buy' }}
+        run: python scripts/load_rent_csv.py --dir ./data/updates/rent
+
+      # ── 3단계: 조회 뷰 갱신 (기본 생략) ────────────────────────────
+      # apt_prices / apt_rent_prices는 최근 6개월(시세)과 12개월(거래량)만 본다.
+      # 그보다 오래된 거래는 아무리 넣어도 뷰의 값이 달라지지 않으므로, 순수한
+      # 과거분 수집이라면 27만 행을 다시 계산할 이유가 없다.
+      # 정기 수집 창과 겹치는 기간을 다시 넣었을 때만 켠다.
+      - name: 조회 뷰 갱신
+        if: ${{ !cancelled() && inputs.refresh_views }}
+        run: python scripts/refresh_views.py
