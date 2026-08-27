@@ -147,7 +147,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: collected-csv
-          path: data/updates/**/*.csv
+          # .csv.invalid는 검색조건이 요청과 달라 격리된 파일이다 (download_csv.py).
+          # 적재에서는 빠지지만 원인 추적에는 필요하니 artifact에는 함께 담는다.
+          path: |
+            data/updates/**/*.csv
+            data/updates/**/*.csv.invalid
           retention-days: 14
           compression-level: 9
           if-no-files-found: warn

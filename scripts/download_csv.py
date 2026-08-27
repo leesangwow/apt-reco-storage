@@ -20,6 +20,7 @@
 
 import argparse
 import asyncio
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -108,6 +109,65 @@ ABORT_AFTER_CONSECUTIVE_FAILURES = 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─── 다운로드 검증 ──────────────────────────────────────────────────────────
+# 2026-08-23 실행에서 서울 매매 파일 하나가 "단독다가구(매매) · 2012-05" 내보내기
+# 7,293행 뒤에 진짜 아파트 데이터 36,491행이 헤더도 없이 이어붙은 채로 내려왔다.
+# 파일명은 정상(아파트(매매)_실거래가_...csv)이고 크기도 14MB여서 아래 size 검사를
+# 통과했고, 적재 단계에 가서야 컬럼 수가 안 맞아 터졌다(Expected 17 fields, saw 19).
+# 사이트가 이전 내보내기 버퍼를 먼저 흘려보낸 것으로 보이며 우리 쪽에서 고칠 수 없다.
+#
+# 대신 받은 직후 파일 앞머리의 검색조건이 우리가 요청한 것과 같은지 확인한다.
+# 다르면 실패로 올려 기존 재시도(MAX_ATTEMPTS)가 다시 받게 한다. 적재까지 가서
+# 터지는 대신 받는 순간 걸리고, 사이트가 가끔 헛것을 주는 성격이라면 재시도로 풀린다.
+HEAD_SCAN_LINES = 40
+
+
+def read_head(path: Path, n: int = HEAD_SCAN_LINES) -> list[str]:
+    """앞 n줄만 읽는다. 파일이 수십 MB라 전체를 메모리에 올릴 이유가 없다."""
+    for enc in ("cp949", "utf-8-sig", "euc-kr"):
+        try:
+            with open(path, encoding=enc) as f:
+                return [line for _, line in zip(range(n), f)]
+        except UnicodeDecodeError:
+            continue
+    return []
+
+
+def search_condition(head: list[str], label: str) -> str | None:
+    """'"실거래구분 : 아파트(매매)"' 같은 줄에서 콜론 뒤 값을 꺼낸다."""
+    for line in head:
+        text = line.strip().strip('"')
+        if text.startswith(label) and ":" in text:
+            return text.split(":", 1)[1].strip()
+    return None
+
+
+def verify_downloaded_csv(path: Path, deal_type: str) -> None:
+    """받은 CSV의 검색조건이 요청과 다르면 RuntimeError."""
+    head = read_head(path)
+    if not head:
+        raise RuntimeError(f"파일 인코딩을 해석할 수 없음: {path.name}")
+
+    kind  = search_condition(head, "실거래구분")
+    dates = search_condition(head, "계약일자")
+
+    # 검색조건 블록 자체가 없으면 우리가 아는 그 파일이 아니다 (오류 페이지 등).
+    if kind is None or dates is None:
+        raise RuntimeError(f"검색조건 블록이 없음: {path.name}")
+
+    expected_kind = f"아파트({DEAL_LABEL[deal_type]})"
+    if kind != expected_kind:
+        raise RuntimeError(f"다른 종류의 파일: 검색조건이 '{kind}' (요청은 '{expected_kind}')")
+
+    # 사이트가 공백이나 구분자를 바꿔도 걸리지 않도록 날짜만 뽑아 비교한다.
+    found = re.findall(r"\d{4}-\d{2}-\d{2}", dates)
+    if found[:2] != [START_DATE, END_DATE]:
+        raise RuntimeError(
+            f"다른 기간의 파일: 검색조건이 '{dates}'"
+            f" (요청은 '{START_DATE} ~ {END_DATE}')"
+        )
+
+
 def screenshot_path(step: str, region_key: str) -> str:
     return f"debug_{step}_{region_key}.png"
 
@@ -178,6 +238,17 @@ async def download_one(
     size = save_path.stat().st_size
     if size == 0:
         raise RuntimeError(f"다운로드 파일이 비어 있음: {save_path.name}")
+
+    # 크기만 보면 통과하는 엉뚱한 파일을 여기서 걸러낸다 (위 verify_downloaded_csv 주석).
+    try:
+        verify_downloaded_csv(save_path, deal_type)
+    except RuntimeError:
+        # 적재 단계가 집어가지 못하게 확장자를 바꿔 치우되, 원인 추적용으로 남긴다.
+        # 로더는 *.csv만 훑으므로 .csv.invalid는 걸리지 않는다.
+        bad = save_path.with_name(save_path.name + ".invalid")
+        bad.unlink(missing_ok=True)
+        save_path.rename(bad)
+        raise
 
     if debug:
         await page.screenshot(path=screenshot_path("05_done", region_key))
