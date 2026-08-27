@@ -86,6 +86,34 @@ jobs:
             playwright install chromium --with-deps
           fi
 
+      # ── 0단계: 접속 진단 ───────────────────────────────────────────
+      # 실패한 실행은 첫 요청부터 13분 내내 9회 연속 전패하고, 성공한 실행은
+      # 32건을 전부 받는다. 중간이 없다. 사이트 부하라면 결과가 섞여야 하는데
+      # 실행 단위로 갈리므로, 시간에 따라 변하는 서버 상태가 아니라 실행마다
+      # 고정된 클라이언트 속성 — 즉 러너 IP — 이 원인일 가능성이 높다.
+      # 에러도 HTTP 응답이 아니라 ERR_CONNECTION_TIMED_OUT(TCP 드롭)이다.
+      # 성공/실패 실행의 IP 대역을 모아 비교하려고 남긴다. 확인되면 지워도 된다.
+      #
+      # 진단이 실패해도 수집은 그대로 진행해야 하므로 절대 죽지 않게 한다.
+      - name: 접속 진단 (러너 IP · 국토부 응답)
+        continue-on-error: true
+        run: |
+          IP="$(curl -s --max-time 10 https://api.ipify.org || echo '조회실패')"
+
+          # 연결이 끊기면 curl은 HTTP 000에 connect 0초를 찍고 실패로 끝난다.
+          # 그 숫자 자체가 신호이므로 출력과 종료코드를 모두 남긴다.
+          URL='https://rt.molit.go.kr/pt/xls/xls.do?mobileAt='
+          FMT='HTTP %{http_code} / connect %{time_connect}s / total %{time_total}s'
+          PROBE="$(curl -s -o /dev/null --max-time 30 -w "$FMT" "$URL")" && RC=0 || RC=$?
+
+          echo "러너 공인 IP : $IP"
+          echo "국토부 응답  : $PROBE (curl exit $RC)"
+          {
+            echo "### 접속 진단"
+            echo "- 러너 공인 IP: \`$IP\`"
+            echo "- 국토부 응답: \`$PROBE\` (curl exit $RC)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ── 1단계: 웹사이트에서 CSV 다운로드 ───────────────────────────
       # --debug: 실패 시 원인 파악용 단계별 스크린샷 (아래 artifact로 업로드)
       # regions 입력이 있으면 그 지역만 — 실패한 지역만 골라 재실행할 때 쓴다.
