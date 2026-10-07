@@ -602,6 +602,7 @@ export default function RecommendContent() {
                                 style={{ color: d > 0 ? '#E8552D' : d < 0 ? '#16A06A' : '#8A8A82' }}>
                                 {d === 0 ? '동일' : `${d > 0 ? '+' : '−'}${won(d)}`}
                               </span>
+                              {o.annualDeals > 0 && <AnnualBadge n={o.annualDeals} />}
                             </button>
                           );
                         })}
