@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { SortKey, SortDir, AddedRegion } from '../types';
 import { areaLabel, getScopeChips, guName, SIDO_SHORT, NEIGHBOR_LABEL } from '@/lib/regions';
+import { naverMapUrl, naverLandUrl } from '@/lib/naver';
 
 function won(n: number): string {
   const v = Math.abs(n);
@@ -67,6 +68,24 @@ function AnnualBadge({ n }: { n: number }) {
       style={{ color: t.color, background: t.bg }}>
       연 {n.toLocaleString()}건
     </span>
+  );
+}
+
+/**
+ * 네이버지도·네이버 부동산 바로가기 뱃지. 새 탭으로 연다.
+ * 카드 전체가 클릭 영역(다시 탐색)이라 전파를 끊어야 카드 클릭이 같이 안 일어난다.
+ */
+function NaverLinks({ apt }: { apt: { name: string; sido: string; gu: string; dong: string } }) {
+  const cls = 'text-[10px] font-bold px-[6px] py-[2px] rounded-[5px] whitespace-nowrap flex-none no-underline';
+  return (
+    <>
+      <a href={naverMapUrl(apt)} target="_blank" rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()} className={cls}
+        style={{ color: '#03A94D', background: '#E6F6EC' }}>지도</a>
+      <a href={naverLandUrl(apt)} target="_blank" rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()} className={cls}
+        style={{ color: '#1E6FD9', background: '#E8F0FB' }}>부동산</a>
+    </>
   );
 }
 
@@ -371,6 +390,9 @@ export default function RecommendContent() {
                     })()}
                     {my.annualDeals > 0 && <AnnualBadge n={my.annualDeals} />}
                   </div>
+                  <div className="flex items-center gap-[5px] mt-[5px]">
+                    <NaverLinks apt={my} />
+                  </div>
                 </div>
                 <div className="text-right flex-none">
                   <div className="text-[20px] font-extrabold text-[#191919]">{won(my.price)}</div>
@@ -540,6 +562,9 @@ export default function RecommendContent() {
                       </div>
                       <div className="text-[11px] text-[#9A9A92] mt-[2px]">
                         {SIDO_SHORT[r.sido] ?? r.sido} {areaLabel(r.sido, r.gu, r.dong)}{r.km ? ` · 직선 ${r.km}km · ${r.mins}` : ''}
+                      </div>
+                      <div className="flex items-center gap-[5px] mt-[4px]">
+                        <NaverLinks apt={r} />
                       </div>
                     </div>
                   </div>
