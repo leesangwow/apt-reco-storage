@@ -173,7 +173,29 @@ export async function GET(req: NextRequest) {
   // DB가 상한만큼 꽉 채워 보냈다면 뒤에 더 있다는 뜻이다.
   const truncated = listRes.some(r => (r.data?.length ?? 0) >= FETCH_ROWS);
 
-  // 단지당 카드 1장 (기준가와 가장 가까운 평형). 같은 단지의 다른 평형이 band에
+  // 정렬과 페이지 나누기는 브라우저가 한다. 여기서 잘라 보내면 "더보기" 한 번에
+  // 추천 3곳을 더 얻으려고 이 요청 전체(단지 500곳 뷰 계산 + 왕복 2번)를 다시 치러야 한다.
+  // 정렬 키는 전부 아래 payload에 실려 있어 다시 조회할 이유가 없다.
+  // 순서는 추린 그대로 둔다 — 미리 정렬해 보내면 동점 항목 순서가 달라진다.
+  // DB가 정렬해 줬지만 여기서 한 번 더 줄을 세운다. 가격차순은 두 묶음을 합친
+  // 결과라 순서가 섞여 있고, 나머지도 이렇게 두면 화면 순서가 항상 이 기준과 같다.
+  //
+  // 같은 비교로 단지의 대표 평형도 고른다(아래). 그래서 이 함수가 먼저 온다.
+  const gap = (r: Row) => Math.abs(Number(r.avg_price) - myPrice);
+  const cmp = (a: Row, b: Row) => {
+    let v = 0;
+    if      (sort === 'price') v = Number(a.avg_price) - Number(b.avg_price);
+    else if (sort === 'area')  v = Number(a.area_sqm) - Number(b.area_sqm);
+    else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
+    else if (sort === 'deals') v = Number(a.tier_deal_count_12m ?? 0) - Number(b.tier_deal_count_12m ?? 0);
+    else                       v = gap(a) - gap(b);
+    return asc ? v : -v;
+  };
+
+  // 단지당 카드 1장. 대표는 지금 정렬에서 맨 앞에 오는 평형이다 — 거래량순이면
+  // 거래가 가장 많은 평형, 평형순이면 가장 작은(큰) 평형. 단지의 순위와 카드에
+  // 보이는 평형이 같은 값에서 나와야 앞뒤가 맞는다. 정렬 키가 같으면(준공순은
+  // 단지 안에서 늘 같다) 기준가와 가까운 쪽을 고른다. 같은 단지의 다른 평형이 band에
   // 함께 걸렸으면 버리지 않고 카드에 붙여 보낸다 — 카드를 늘리면 비슷한 값의 다른
   // 단지가 그만큼 밀려나므로, 카드는 하나로 두고 참고용으로만 보여준다.
   const groups = new Map<string, typeof rows>();
@@ -190,7 +212,8 @@ export async function GET(req: NextRequest) {
   for (const [key, g] of groups) {
     let rep = g[0];
     for (const r of g) {
-      if (Math.abs(Number(r.avg_price) - myPrice) < Math.abs(Number(rep.avg_price) - myPrice)) rep = r;
+      const c = cmp(r, rep);
+      if (c < 0 || (c === 0 && gap(r) < gap(rep))) rep = r;
     }
     complexMap.set(key, rep);
     // 대표와 같은 평형 구간의 파편(84.40·84.97 등)은 다른 평형이 아니다. 구간째로 빼고
@@ -199,21 +222,7 @@ export async function GET(req: NextRequest) {
     if (others.length > 0) siblingsOf.set(rep.id, others);
   }
 
-  // 정렬과 페이지 나누기는 브라우저가 한다. 여기서 잘라 보내면 "더보기" 한 번에
-  // 추천 3곳을 더 얻으려고 이 요청 전체(단지 500곳 뷰 계산 + 왕복 2번)를 다시 치러야 한다.
-  // 정렬 키는 전부 아래 payload에 실려 있어 다시 조회할 이유가 없다.
-  // 순서는 추린 그대로 둔다 — 미리 정렬해 보내면 동점 항목 순서가 달라진다.
-  // DB가 정렬해 줬지만 여기서 한 번 더 줄을 세운다. 가격차순은 두 묶음을 합친
-  // 결과라 순서가 섞여 있고, 나머지도 이렇게 두면 화면 순서가 항상 이 기준과 같다.
-  const sorted = Array.from(complexMap.values()).sort((a, b) => {
-    let v = 0;
-    if      (sort === 'price') v = Number(a.avg_price) - Number(b.avg_price);
-    else if (sort === 'area')  v = Number(a.area_sqm) - Number(b.area_sqm);
-    else if (sort === 'year')  v = (a.year_built ?? 0) - (b.year_built ?? 0);
-    else if (sort === 'deals') v = Number(a.tier_deal_count_12m ?? 0) - Number(b.tier_deal_count_12m ?? 0);
-    else                       v = Math.abs(Number(a.avg_price) - myPrice) - Math.abs(Number(b.avg_price) - myPrice);
-    return asc ? v : -v;
-  });
+  const sorted = Array.from(complexMap.values()).sort(cmp);
 
   // 100곳을 넘겨 봐야 아무도 안 본다. 더보기는 이 안에서 브라우저가 처리한다.
   // otherTiers는 이 band 안에 함께 걸린 같은 단지의 다른 평형이다. DB에서 받은 행
