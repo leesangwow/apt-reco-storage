@@ -165,17 +165,30 @@ export async function GET(req: NextRequest) {
   // DB가 상한만큼 꽉 채워 보냈다면 뒤에 더 있다는 뜻이다.
   const truncated = listRes.some(r => (r.data?.length ?? 0) >= FETCH_ROWS);
 
-  // 단지당 1개 (기준가와 가장 가까운 평형)
-  const complexMap = new Map<string, typeof rows[0]>();
+  // 단지당 카드 1장 (기준가와 가장 가까운 평형). 같은 단지의 다른 평형이 band에
+  // 함께 걸렸으면 버리지 않고 카드에 붙여 보낸다 — 카드를 늘리면 비슷한 값의 다른
+  // 단지가 그만큼 밀려나므로, 카드는 하나로 두고 참고용으로만 보여준다.
+  const groups = new Map<string, typeof rows>();
   for (const r of (rows ?? [])) {
     // 기준 단지 본인만 뺀다. 이름만 비교하면 다른 구·동의 동명 단지까지 사라진다
     // (현대·주공·e편한세상처럼 흔한 이름은 전국에 널려 있다).
     if (base && r.name === base.name && r.gu === base.gu && r.dong === base.dong) continue;
     const key = `${r.name}||${r.gu}||${r.dong}`;
-    const cur = complexMap.get(key);
-    if (!cur || Math.abs(Number(r.avg_deposit) - myPrice) < Math.abs(Number(cur.avg_deposit) - myPrice)) {
-      complexMap.set(key, r);
+    const g = groups.get(key);
+    if (g) g.push(r); else groups.set(key, [r]);
+  }
+  const complexMap = new Map<string, typeof rows[0]>();
+  const siblingsOf = new Map<string, typeof rows>();
+  for (const [key, g] of groups) {
+    let rep = g[0];
+    for (const r of g) {
+      if (Math.abs(Number(r.avg_deposit) - myPrice) < Math.abs(Number(rep.avg_deposit) - myPrice)) rep = r;
     }
+    complexMap.set(key, rep);
+    // 대표와 같은 평형 구간의 파편(84.40·84.97 등)은 다른 평형이 아니다. 구간째로 빼고
+    // 나머지는 구간당 하나로 접는다.
+    const others = dedupeByTier(g.filter(r => r.size_tier !== rep.size_tier));
+    if (others.length > 0) siblingsOf.set(rep.id, others);
   }
 
   // 정렬과 페이지 나누기는 브라우저가 한다. 여기서 잘라 보내면 "더보기" 한 번에
@@ -195,7 +208,12 @@ export async function GET(req: NextRequest) {
   });
 
   // 100곳을 넘겨 봐야 아무도 안 본다. 더보기는 이 안에서 브라우저가 처리한다.
-  const items = sorted.slice(0, MAX_COMPLEXES).map(toItem);
+  // otherTiers는 이 band 안에 함께 걸린 같은 단지의 다른 평형이다. DB에서 받은 행
+  // 안에서만 찾으므로, 상한(FETCH_ROWS)에 밀려 못 받은 평형은 빠질 수 있다 (참고용).
+  const items = sorted.slice(0, MAX_COMPLEXES).map(r => ({
+    ...toItem(r),
+    otherTiers: (siblingsOf.get(r.id) ?? []).map(toItem),
+  }));
 
   const basePayload = priceMode
     ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,

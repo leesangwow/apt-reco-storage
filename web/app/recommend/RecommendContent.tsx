@@ -33,7 +33,12 @@ interface RecItem {
   km: number | null; mins: string | null;
   dealCount: number; annualDeals: number; latestDate: string; freshness: Freshness;
   latestPrice: number; latestFloor: number | null; latestContractDate: string;
+  // 같은 단지에서 이 가격 band에 함께 걸린 다른 평형 (참고용, 평형 구간당 하나)
+  otherTiers?: RecItem[];
 }
+
+// 카드에 바로 펼쳐 둘 다른 평형 수. 넘치면 "+N"으로 접는다.
+const OTHER_TIERS_SHOWN = 3;
 
 const FRESHNESS_CONFIG: Record<Freshness, { label: string; color: string; bg: string }> = {
   fresh_high: { label: '3건 · 1개월↓', color: '#0A8A4A', bg: '#E2F5EC' }, // 진초록
@@ -99,6 +104,8 @@ export default function RecommendContent() {
   const lastBaseRef = useRef<BaseApt | null>(null); // 마지막으로 성공한 기준 아파트 캐시
 
   const [liked, setLiked] = useState<Record<number, boolean>>({});
+  // 카드별 "다른 평형" 칩을 전부 펼쳤는지
+  const [expandedTiers, setExpandedTiers] = useState<Record<number, boolean>>({});
   const [searchOpen, setSearchOpen] = useState(false);
   const [q, setQ] = useState('');
   const [searchResults, setSearchResults] = useState<Array<{
@@ -574,6 +581,40 @@ export default function RecommendContent() {
                   {r.annualDeals > 0 && <AnnualBadge n={r.annualDeals} />}
                   </div>
                 </div>
+                {/* 같은 단지의 다른 평형 중 이 가격대에 함께 걸린 것. 카드는 단지당 하나로
+                    두고 여기서만 참고로 보여준다. 누르면 그 평형 기준으로 다시 탐색한다. */}
+                {(r.otherTiers?.length ?? 0) > 0 && (() => {
+                  const others = r.otherTiers!;
+                  const open = !!expandedTiers[r.id];
+                  const shown = open ? others : others.slice(0, OTHER_TIERS_SHOWN);
+                  const hidden = others.length - shown.length;
+                  return (
+                    <div className="mt-[9px] border-t border-[#F4F4F0] pt-[9px]">
+                      <div className="text-[11px] text-[#ADADA4] mb-[6px]">이 가격대 다른 평형</div>
+                      <div className="flex flex-wrap gap-[6px]">
+                        {shown.map(o => {
+                          const d = +(o.price - (my?.price ?? 0)).toFixed(1);
+                          return (
+                            <button key={o.id} onClick={e => { e.stopPropagation(); handleCardClick(o); }}
+                              className="flex items-center gap-[5px] border border-[#EAEAE4] bg-[#FAFAF7] rounded-[9px] px-[9px] py-[5px] cursor-pointer hover:border-[#D2D2CA] transition-colors">
+                              <span className="text-[12px] font-extrabold text-[#3A3A36] whitespace-nowrap">{o.sizeLabel} · {won(o.price)}</span>
+                              <span className="text-[10.5px] font-bold whitespace-nowrap"
+                                style={{ color: d > 0 ? '#E8552D' : d < 0 ? '#16A06A' : '#8A8A82' }}>
+                                {d === 0 ? '동일' : `${d > 0 ? '+' : '−'}${won(d)}`}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {others.length > OTHER_TIERS_SHOWN && (
+                          <button onClick={e => { e.stopPropagation(); setExpandedTiers(x => ({ ...x, [r.id]: !open })); }}
+                            className="border border-dashed border-[#D2D2CA] bg-white rounded-[9px] px-[9px] py-[5px] text-[12px] font-bold text-[#80807A] cursor-pointer">
+                            {open ? '접기' : `+${hidden}`}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
