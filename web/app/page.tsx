@@ -109,7 +109,7 @@ function LandingContent() {
   useEffect(() => {
     fetch('/api/regions')
       .then(r => r.json())
-      .then(setSidoList)
+      .then(d => setSidoList(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
 
@@ -121,7 +121,7 @@ function LandingContent() {
     setGuLoading(true);
     fetch(`/api/regions?sido=${encodeURIComponent(selectedSido)}`)
       .then(r => r.json())
-      .then(setGuList)
+      .then(d => setGuList(Array.isArray(d) ? d : []))
       .catch(() => {})
       .finally(() => setGuLoading(false));
   }, [selectedSido]);
