@@ -170,7 +170,7 @@ export default function RecommendContent() {
   useEffect(() => {
     fetch('/api/regions')
       .then(r => r.json())
-      .then(setSidoList)
+      .then(d => setSidoList(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
 
@@ -181,7 +181,7 @@ export default function RecommendContent() {
     setGuList([]);
     fetch(`/api/regions?sido=${encodeURIComponent(sheetSido)}`)
       .then(r => r.json())
-      .then(setGuList)
+      .then(d => setGuList(Array.isArray(d) ? d : []))
       .catch(() => {})
       .finally(() => setGuLoading(false));
   }, [sheetSido]);
