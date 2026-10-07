@@ -2,4 +2,8 @@ pandas
 psycopg2-binary
 python-dotenv
 tqdm
-playwright>=1.45.0
+# 정확히 고정한다. auto-collect.yml의 브라우저 캐시 키가 이 파일의 해시라서,
+# 범위로 두면 새 버전이 깔려도 키가 그대로여서 옛 Chromium 캐시가 적중하고
+# "Executable doesn't exist"로 수집이 죽는다 (2026-09-27~10-06 전패).
+# 올릴 때는 이 숫자만 바꾸면 캐시도 함께 새로 만들어진다.
+playwright==1.63.0
