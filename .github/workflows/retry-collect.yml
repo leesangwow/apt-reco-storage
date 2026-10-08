@@ -50,7 +50,8 @@ jobs:
             --repo "${{ github.repository }}" \
             --ref "${{ github.event.workflow_run.head_branch }}" \
             -f type=all \
-            -f regions=
+            -f regions= \
+            -f trigger=retry
 
       - name: 요약
         if: always()
