@@ -17,6 +17,7 @@ const THUMB_COLORS = ['#F2B705', '#6AB7A8', '#E8855B', '#9C8AD6', '#7FA6E0'];
 
 interface BaseApt {
   id: number; name: string; sido: string; gu: string; dong: string;
+  address: string | null;   // 도로명주소 ('율하3로 100'). 지도 링크가 쓴다
   // pyeong은 통칭 평형(전용 84㎡ → 34평), sizeLabel은 그 평형 구간에 실제로 있는
   // 평형 범위("34평" 또는 "32~35평"). area는 전용면적 그대로다.
   price: number; pyeong: number; area: number; areaExact: number; sizeTier: number; sizeLabel: string;
@@ -29,6 +30,7 @@ type Freshness = 'fresh_high' | 'fresh_mid' | 'fresh_low' | 'scarce';
 
 interface RecItem {
   id: number; name: string; sido: string; gu: string; dong: string;
+  address: string | null;   // 도로명주소 ('율하3로 100'). 지도 링크가 쓴다
   price: number; pyeong: number; area: number; areaExact: number; sizeTier: number; sizeLabel: string;
   year: number | null; hh: number | null;
   km: number | null; mins: string | null;
@@ -75,7 +77,7 @@ function AnnualBadge({ n }: { n: number }) {
  * 네이버지도·네이버 부동산 바로가기 뱃지. 새 탭으로 연다.
  * 카드 전체가 클릭 영역(다시 탐색)이라 전파를 끊어야 카드 클릭이 같이 안 일어난다.
  */
-function NaverLinks({ apt }: { apt: { name: string; sido: string; gu: string; dong: string } }) {
+function NaverLinks({ apt }: { apt: { name: string; sido: string; gu: string; dong: string; address: string | null } }) {
   const cls = 'text-[10px] font-bold px-[6px] py-[2px] rounded-[5px] whitespace-nowrap flex-none no-underline';
   return (
     <>
