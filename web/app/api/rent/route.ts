@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { NEIGHBORS } from '@/lib/regions';
 import { dedupeByTier } from '@/lib/tier';
 
-const COLS = 'id, name, sido, gu, dong, pyeong, pyeong_supply, area_sqm, avg_deposit, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_deposit, latest_contract_date, size_tier, size_label, tier_deal_count_12m';
+const COLS = 'id, name, sido, gu, dong, address, pyeong, pyeong_supply, area_sqm, avg_deposit, year_built, hh, deal_count, deal_count_12m, latest_date, oldest_date, freshness, latest_deposit, latest_contract_date, size_tier, size_label, tier_deal_count_12m';
 
 // 화면에 보여줄 단지 수 상한. 사용자가 100곳 넘게 훑어보는 일은 없다.
 const MAX_COMPLEXES = 100;
@@ -15,6 +15,7 @@ const FETCH_ROWS = 500;
 type Row = Record<string, any>;
 const toItem = (r: Row) => ({
   id: r.id, name: r.name, sido: r.sido, gu: r.gu, dong: r.dong,
+  address: r.address ?? null,
   price: Number(r.avg_deposit),
   pyeong: r.pyeong_supply,
   area: Math.round(Number(r.area_sqm)),
@@ -225,7 +226,7 @@ export async function GET(req: NextRequest) {
   }));
 
   const basePayload = priceMode
-    ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', price: myPrice,
+    ? { id: 0, name: '', sido: sidoParam, gu: guParam, dong: '', address: null, price: myPrice,
         pyeong: 0, area: 0, areaExact: 0, sizeTier: 0, sizeLabel: '', year: null, hh: null,
         dealCount: 0, annualDeals: 0, latestDate: '', freshness: 'fresh_high' as const,
         latestPrice: 0, latestFloor: null, latestContractDate: '',
