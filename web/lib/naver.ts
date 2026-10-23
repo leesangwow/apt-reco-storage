@@ -31,6 +31,12 @@ export function naverMapUrl(p: Place): string {
   return `https://map.naver.com/p/search/${encodeURIComponent(roadAddress(p) ?? nameQuery(p))}`;
 }
 
+/**
+ * 부동산 검색어는 "동 단지명"이다. 구까지 붙인 "구 동 단지명"은 네이버 부동산 검색이
+ * "찾을 수 없습니다"로 떨어지는 단지가 많았고, 동만 붙이면 대부분 맞게 찾는다
+ * (사용자가 직접 비교해 확인). 동이 비면 단지명만 쓴다.
+ */
 export function naverLandUrl(p: Place): string {
-  return `https://m.land.naver.com/search/result/${encodeURIComponent(nameQuery(p))}`;
+  const q = [p.dong, p.name].filter(Boolean).join(' ');
+  return `https://m.land.naver.com/search/result/${encodeURIComponent(q)}`;
 }
